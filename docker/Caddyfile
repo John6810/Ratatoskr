@@ -39,10 +39,6 @@
 	header @static Cache-Control "public, max-age=31536000, immutable"
 
 	# /announce is served by the Laravel app — no special routing here.
-	# php_server handles static files via try_files and falls back to PHP.
-	php_server {
-		# Disable resolution of root-relative redirects to /index.php — Laravel
-		# already produces the right URLs and double-resolution breaks /announce.
-		try_files {path} {path}/ /index.php?{query}
-	}
+	# php_server handles static files and falls back to /index.php internally.
+	php_server
 }
