@@ -1,0 +1,48 @@
+# FrankenPHP Caddyfile — UNIT3D worker mode.
+#
+# SERVER_NAME is injected at runtime (default :80). Behind a reverse proxy
+# (Traefik, Ingress) keep the default and terminate TLS upstream. As an
+# edge container, set SERVER_NAME to a real hostname to enable automatic
+# Let's Encrypt TLS via Caddy.
+
+{
+	# FrankenPHP global config — worker mode is what makes this image worth using.
+	frankenphp {
+		num_threads {$FRANKENPHP_NUM_THREADS:auto}
+		worker {
+			file ./public/index.php
+			num {$FRANKENPHP_NUM_WORKERS:auto}
+		}
+	}
+
+	# Quieter admin endpoint — disable in containers (Caddy admin API is
+	# not needed at runtime and the listener leaks the worker count).
+	admin off
+
+	# JSON access logs go to stdout via the per-site `log` directive below.
+}
+
+{$SERVER_NAME} {
+	log {
+		output stdout
+		format json
+	}
+
+	root * /app/public
+
+	encode zstd br gzip
+
+	# Long cache for hashed Vite assets.
+	@static {
+		path /build/* /favicon.ico /robots.txt
+	}
+	header @static Cache-Control "public, max-age=31536000, immutable"
+
+	# /announce is served by the Laravel app — no special routing here.
+	# php_server handles static files via try_files and falls back to PHP.
+	php_server {
+		# Disable resolution of root-relative redirects to /index.php — Laravel
+		# already produces the right URLs and double-resolution breaks /announce.
+		try_files {path} {path}/ /index.php?{query}
+	}
+}

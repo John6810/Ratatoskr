@@ -1,0 +1,40 @@
+# Keep the build context small. The image gets UNIT3D source from `git clone`
+# in the builder stage — the only thing actually copied from the host context
+# is docker/Caddyfile.
+
+# VCS / CI / editor metadata
+.git/
+.github/
+.gitattributes
+.gitignore
+.editorconfig
+
+# Claude Code workspace (rules, agents, skills — not for the image)
+.claude/
+
+# Repo trees that never belong in the build context
+docs/
+kustomize/
+helm/
+argocd/
+terraform/
+compose/
+
+# Markdown docs (LICENSE is not markdown — kept available if ever needed)
+*.md
+CHANGELOG.md
+
+# Local artifacts that may exist on a contributor's machine
+node_modules/
+vendor/
+
+# Secrets and local env overrides — never copy these in
+.env
+.env.*
+!.env.example
+
+# IDE / OS junk
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
