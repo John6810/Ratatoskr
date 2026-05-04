@@ -23,9 +23,11 @@
 | Database | MariaDB | `11` |
 | Cache / queues / broadcast | Redis | `7` |
 | Search | MeiliSearch | latest stable (verify) |
-| WebSockets | Laravel Reverb | bundled |
+| Broadcasting | Laravel broadcast, Redis driver | bundled (`BROADCAST_CONNECTION=redis`) |
 
 Mismatches between this file and reality have happened. Run the `check-upstream-versions` skill before pinning anything new, and update code + this table in the same commit.
+
+**No WebSocket server.** UNIT3D v9.2.0 does not bundle Reverb (or Soketi, or any WebSocket broker) — verified against `composer.json`, `config/broadcasting.php`, `package.json`, and `.env.example` at the v9.2.0 tag. Server-side broadcasting works through Redis pub/sub for queue jobs and inter-process events; there is no browser-facing WS path for live chat or presence in the vanilla install. Real-time UI is upstream's responsibility — if a future UNIT3D release adopts Reverb (or anything else), ratatoskr will add the matching service and update this table in the same commit.
 
 ## Conventions
 
@@ -48,7 +50,7 @@ These are not obvious and break deployments. Flag them when relevant:
 - **MeiliSearch is single-node** — no native HA. Document snapshot/restore. Acceptable degradation: search falls back to SQL `LIKE`.
 - **Migrations before app pods** — Helm pre-install hook or init Job. Never bake `php artisan migrate` into the main pod entrypoint.
 - **First boot needs owner bootstrap** — `DEFAULT_OWNER_*` env vars create the initial admin. Document this.
-- **Reverb is the WebSocket server in Laravel 11+** — Soketi/Pusher are deprecated paths. New work targets Reverb only.
+- **No WebSocket server in v9.2.0** — broadcasting is Redis pub/sub only, no browser-facing WS. If a future UNIT3D release adopts Reverb (the Laravel 11+ canonical path), ratatoskr will follow upstream rather than fork-ship a Reverb container that vanilla UNIT3D can't talk to.
 
 ## Style for generated content
 
