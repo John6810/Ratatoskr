@@ -1,0 +1,176 @@
+# ratatoskr — UNIT3D Community Edition Compose stack.
+#
+# Single-host, production-shaped local deployment. For multi-node K8s, see
+# ../kustomize/ or ../helm/. Build context is the repo root (one level up)
+# because the Dockerfile copies docker/Caddyfile from there.
+#
+# See README.md for the 5-step quickstart.
+
+name: ratatoskr
+
+services:
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?}
+      MARIADB_DATABASE: ${DB_DATABASE:?}
+      MARIADB_USER: ${DB_USERNAME:?}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    # healthcheck.sh ships in the official MariaDB image since 10.11.
+    # --innodb_initialized waits for InnoDB recovery, which is what we
+    # actually need before letting Laravel migrate run.
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?}
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.43
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_KEY:?}
+      MEILI_ENV: ${MEILI_ENV:-production}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch-data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "3", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # One-shot migration + seed. Runs DatabaseSeeder which calls UserSeeder
+  # (creates the bootstrap admin from DEFAULT_OWNER_*). Re-running is safe:
+  # migrate is idempotent, seeder uses firstOrCreate.
+  unit3d-migrate:
+    image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        UNIT3D_VERSION: ${UNIT3D_VERSION:-v9.2.0}
+    restart: "no"
+    env_file: .env
+    entrypoint: ["php", "/app/artisan"]
+    command: ["migrate", "--force", "--seed"]
+    volumes:
+      - unit3d-storage:/app/storage
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+
+  unit3d:
+    image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:${UNIT3D_PORT:-8080}:80"
+    volumes:
+      - unit3d-storage:/app/storage
+    depends_on:
+      unit3d-migrate:
+        condition: service_completed_successfully
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    # UNIT3D v9.2.0 has no native /health endpoint. Probing / returns 200
+    # or 302 (unauthenticated redirect to /login); curl -f accepts both.
+    # 60s start_period covers FrankenPHP worker warm-up.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS --max-time 4 -o /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  unit3d-scheduler:
+    image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
+    restart: unless-stopped
+    env_file: .env
+    entrypoint: ["php", "/app/artisan"]
+    # schedule:work is the long-running scheduler (Laravel 10+); sleeps
+    # until the next minute and dispatches due tasks. No cron sidecar.
+    command: ["schedule:work"]
+    volumes:
+      - unit3d-storage:/app/storage
+    depends_on:
+      unit3d-migrate:
+        condition: service_completed_successfully
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Workers don't expose HTTP. `artisan --version` exercises PHP +
+    # autoloader + app bootstrap — fails fast if the image is broken.
+    # If the worker process crashes, restart: unless-stopped recovers it.
+    healthcheck:
+      test: ["CMD-SHELL", "php /app/artisan --version >/dev/null 2>&1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  unit3d-queue:
+    image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
+    restart: unless-stopped
+    env_file: .env
+    entrypoint: ["php", "/app/artisan"]
+    command:
+      - queue:work
+      - --tries=3
+      - --max-time=3600
+      - --sleep=3
+    volumes:
+      - unit3d-storage:/app/storage
+    depends_on:
+      unit3d-migrate:
+        condition: service_completed_successfully
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "php /app/artisan --version >/dev/null 2>&1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  mariadb-data:
+  redis-data:
+  meilisearch-data:
+  unit3d-storage:

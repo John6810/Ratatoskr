@@ -1,0 +1,42 @@
+# Smoke test override for the docker-build-local skill.
+#
+# Pairs with compose/.env.test (deterministic fixtures) and the locally-built
+# image ratatoskr/unit3d:dev. Run via:
+#
+#   docker compose --project-name ratatoskr-test \
+#     --env-file compose/.env.test \
+#     --file compose/docker-compose.yml \
+#     --file compose/docker-compose.test.yml up -d --wait --wait-timeout 180
+#
+# Project name `ratatoskr-test` scopes the volumes so `down --volumes` cleans
+# them and never collides with a parallel dev compose.
+
+services:
+  # Disable the build on the migrate service — we want every unit3d-* container
+  # to use the image already built and tagged as ratatoskr/unit3d:dev. Setting
+  # build to !reset (compose v2.20+) detaches the inherited build block.
+  # `env_file: !override` replaces the base's `.env` with `.env.test` (the
+  # default is to merge both, which would require .env to also exist).
+  unit3d-migrate:
+    image: ratatoskr/unit3d:dev
+    build: !reset null
+    env_file: !override
+      - .env.test
+
+  unit3d:
+    image: ratatoskr/unit3d:dev
+    env_file: !override
+      - .env.test
+    # Random ephemeral host port so a parallel dev compose on :8080 doesn't clash.
+    ports: !override
+      - "127.0.0.1::80"
+
+  unit3d-scheduler:
+    image: ratatoskr/unit3d:dev
+    env_file: !override
+      - .env.test
+
+  unit3d-queue:
+    image: ratatoskr/unit3d:dev
+    env_file: !override
+      - .env.test
