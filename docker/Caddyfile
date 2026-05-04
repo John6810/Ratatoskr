@@ -7,10 +7,13 @@
 
 {
 	# FrankenPHP global config — worker mode is what makes this image worth using.
+	# The worker file is Octane's stub (vendor/laravel/octane/src/Commands/stubs/
+	# frankenphp-worker.php), copied to public/ at build time. Stock public/index.php
+	# does not call frankenphp_handle_request() and aborts the worker loop.
 	frankenphp {
 		num_threads {$FRANKENPHP_NUM_THREADS:auto}
 		worker {
-			file ./public/index.php
+			file ./public/frankenphp-worker.php
 			num {$FRANKENPHP_NUM_WORKERS:auto}
 		}
 	}
@@ -39,6 +42,11 @@
 	header @static Cache-Control "public, max-age=31536000, immutable"
 
 	# /announce is served by the Laravel app — no special routing here.
-	# php_server handles static files and falls back to /index.php internally.
-	php_server
+	# Octane requires the worker stub to be the index + try_files fallback
+	# (so dynamic routes are handled by the worker, not /index.php).
+	php_server {
+		index frankenphp-worker.php
+		try_files {path} frankenphp-worker.php
+		resolve_root_symlink
+	}
 }

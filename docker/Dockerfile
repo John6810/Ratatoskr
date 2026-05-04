@@ -51,7 +51,19 @@ WORKDIR /build
 RUN git clone --depth 1 --branch "${UNIT3D_VERSION}" \
         https://github.com/HDInnovations/UNIT3D.git .
 
-RUN composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
+# --no-scripts skips Laravel's package:discover post-autoload-dump hook, which
+# boots the framework and chokes on env-driven config (e.g. parse_url(env('APP_URL'))
+# in config/secure-headers.php) when no .env is present at build time.
+# package:discover runs at first artisan invocation inside unit3d-migrate.
+RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction --prefer-dist
+
+# FrankenPHP worker mode needs a worker entrypoint that calls
+# frankenphp_handle_request() in a loop — stock public/index.php doesn't.
+# Octane ships the right stub; copy it into public/ so the Caddyfile can
+# point at it. We avoid `php artisan octane:install` because it mutates
+# .gitignore and downloads a separate frankenphp binary we don't need.
+RUN cp vendor/laravel/octane/src/Commands/stubs/frankenphp-worker.php \
+       public/frankenphp-worker.php
 
 RUN bun install --frozen-lockfile \
     && bun run build \
@@ -83,11 +95,16 @@ LABEL org.opencontainers.image.source="https://github.com/john6810/ratatoskr" \
 # operator's .env, ConfigMap, or Helm values — never hardcoded in the image.
 ENV DEBIAN_FRONTEND=noninteractive \
     SERVER_NAME=":80" \
-    FRANKENPHP_CONFIG="worker ./public/index.php"
+    FRANKENPHP_CONFIG="worker ./public/frankenphp-worker.php"
 
+# mariadb-client is required by Laravel's `migrate` when a schema dump exists
+# at database/schema/mysql-schema.sql (UNIT3D v9.2.0 ships one). Laravel shells
+# out to `mysql ... < mysql-schema.sql` for fast fresh installs. Also useful
+# for operators debugging the DB inside the container.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        mariadb-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN install-php-extensions \
