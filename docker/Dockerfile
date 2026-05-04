@@ -119,6 +119,13 @@ RUN install-php-extensions \
         sodium \
         zip
 
+# linux-libc-dev ships Linux kernel headers and is pulled in transitively by
+# the PHP extension build chain. We never use them at runtime, and Trivy
+# reports kernel CVEs against this package — false positives in a container,
+# which uses the host's kernel. Purge it after extensions are built. The
+# `|| true` keeps the build green if a future base image stops shipping it.
+RUN apt-get purge -y --auto-remove linux-libc-dev 2>/dev/null || true
+
 # Production php.ini (opcache enabled, sane memory_limit, no display_errors).
 RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
 
