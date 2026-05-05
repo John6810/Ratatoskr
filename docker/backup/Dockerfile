@@ -54,6 +54,22 @@ RUN set -eux; \
         exit 1; \
     fi
 
+# Bump vendored deps that ship with active CVEs in restic's pinned go.mod,
+# to the smallest version that fixes each vulnerability. These are minor
+# bumps within established semver compat ranges; `go mod tidy` regenerates
+# go.sum to match. The resulting binary is "restic v0.18.1 source +
+# security-patched deps" — not byte-identical to the upstream release
+# binary, but functionally equivalent at the restic API surface.
+#
+#   github.com/go-jose/go-jose/v4 4.0.5 -> 4.1.4   CVE-2026-34986 (DoS via crafted JWE)
+#   go.opentelemetry.io/otel/sdk  1.36  -> 1.43.0  CVE-2026-24051, CVE-2026-39883 (PATH hijacking)
+#   google.golang.org/grpc        1.74  -> 1.79.3  CVE-2026-33186 (authz HTTP/2 path bypass)
+RUN set -eux; \
+    go get github.com/go-jose/go-jose/v4@v4.1.4; \
+    go get go.opentelemetry.io/otel/sdk@v1.43.0; \
+    go get google.golang.org/grpc@v1.79.3; \
+    go mod tidy
+
 # -trimpath strips host filesystem paths from the binary (reproducibility).
 # -s -w drops the symbol table and DWARF debug info (smaller binary).
 # -X main.version stamps the displayed version so `restic version` shows
