@@ -86,9 +86,27 @@ images to ghcr.io with cosign signatures and SBOM attestations.
   runtime image so the kernel-headers package no longer triggers
   CVE-against-the-kernel matches in scans. The runtime never
   needs kernel headers (FrankenPHP is userland only).
+- MeiliSearch first-boot — `unit3d-migrate` now chains
+  `scout:sync-index-settings` after `migrate --seed`. UNIT3D
+  v9.2.0 declares `filterableAttributes` for the `torrents` and
+  `people` indexes in `config/scout.php`, but no command pushed
+  that config to MeiliSearch automatically. Result: any filter
+  clause — including the `status = N` predicate that drives
+  `/torrents` — threw a 400 from Meili which Laravel surfaced as
+  500. The sync command is idempotent, so re-runs on container
+  restart are free. `scout:import` is intentionally not chained:
+  on a populated tracker it would re-index every row in 500-batch
+  chunks (hours), blocking the migrate one-shot and everything
+  that depends on `service_completed_successfully`.
 
 ### 📚 Docs
 
+- MeiliSearch backfill recipe — `compose/README.md` adds a
+  "Restoring MeiliSearch indexes" section documenting the manual
+  `scout:flush` + `scout:import` sequence for recovery scenarios
+  (Meili data loss, manual flush, post-upgrade reindex). Explicit
+  "hours, not minutes — run during a maintenance window" warning
+  for operators with populated trackers.
 - Operator guide — `docs/backup-restore.md` covers the full v0.2
   backup pipeline: TL;DR, Mermaid sequence diagram of the
   streaming pipe, key escrow strategies (Shamir 3-of-5

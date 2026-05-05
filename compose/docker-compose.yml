@@ -63,9 +63,22 @@ services:
       retries: 5
       start_period: 5s
 
-  # One-shot migration + seed. Runs DatabaseSeeder which calls UserSeeder
-  # (creates the bootstrap admin from DEFAULT_OWNER_*). Re-running is safe:
-  # migrate is idempotent, seeder uses firstOrCreate.
+  # One-shot migration + seed + Meili index settings push. Runs DatabaseSeeder
+  # (UserSeeder creates the bootstrap admin from DEFAULT_OWNER_*) and then
+  # `scout:sync-index-settings`, which pushes the filterableAttributes /
+  # sortableAttributes / etc. blocks declared in config/scout.php to
+  # MeiliSearch (Torrent + Person indexes in v9.2.0). Without that push,
+  # Meili's `torrents` index has no filterable attributes and the `status`
+  # filter that drives /torrents returns 500. Re-running is safe: migrate is
+  # idempotent, the seeder uses firstOrCreate, scout:sync-index-settings is
+  # a push-overwrite of declarative config.
+  #
+  # `scout:import` is intentionally NOT chained here. On a populated tracker
+  # it re-imports every row in 500-batch chunks (hours on real data) on every
+  # restart, blocking unit3d / scheduler / queue via service_completed_successfully.
+  # Ongoing drift is handled by UNIT3D's auto:sync_torrents_to_meilisearch
+  # scheduled command (every 15 min, delta-only) inside unit3d-scheduler.
+  # See compose/README.md for the manual backfill recipe.
   unit3d-migrate:
     image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
     build:
@@ -75,8 +88,11 @@ services:
         UNIT3D_VERSION: ${UNIT3D_VERSION:-v9.2.0}
     restart: "no"
     env_file: .env
-    entrypoint: ["php", "/app/artisan"]
-    command: ["migrate", "--force", "--seed"]
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        php /app/artisan migrate --force --seed &&
+        php /app/artisan scout:sync-index-settings
     volumes:
       - unit3d-storage:/app/storage
     depends_on:

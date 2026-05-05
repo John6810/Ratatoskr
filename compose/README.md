@@ -104,6 +104,31 @@ docker compose down
 docker compose down -v
 ```
 
+## Restoring MeiliSearch indexes
+
+`unit3d-migrate` pushes the index settings (`filterableAttributes`, etc.)
+on every boot via `scout:sync-index-settings`, but it intentionally does
+not re-import every row — that would block boot for hours on a populated
+tracker. Ongoing drift is handled by UNIT3D's
+`auto:sync_torrents_to_meilisearch` scheduled command (every 15 min,
+delta-only) running inside `unit3d-scheduler`.
+
+Run a manual backfill only if MeiliSearch lost data, the index was
+manually flushed, or a UNIT3D upgrade changed `toSearchableArray()`:
+
+```bash
+docker compose run --rm unit3d-migrate sh -c '
+  php artisan scout:flush "App\\Models\\Torrent" &&
+  php artisan scout:flush "App\\Models\\Person" &&
+  php artisan scout:import "App\\Models\\Torrent" &&
+  php artisan scout:import "App\\Models\\Person"
+'
+```
+
+`scout:flush` empties the Meili index, `scout:import` re-pushes every row
+in 500-batch chunks. On a multi-million-row tracker plan for hours, not
+minutes — run during a maintenance window.
+
 ## Backup & restore
 
 ratatoskr v0.2 ships a dedicated backup image (`ratatoskr/unit3d-backup`)
