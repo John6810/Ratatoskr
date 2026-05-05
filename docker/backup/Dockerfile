@@ -13,12 +13,17 @@
 # rebuilt to address. The supply-chain assurance is equivalent — pinned
 # git tag + commit SHA verified at clone time, instead of a binary checksum.
 
+# Global build args — declared before the first FROM so BuildKit substitutes
+# them in every stage's `FROM` line. Re-declared (without a default) inside
+# each stage that needs them via `ARG` so the value flows into RUN/LABEL too.
+ARG GO_VERSION=1.26-bookworm
+ARG MARIADB_VERSION=11.8
+
 # =============================================================================
 # Stage 1 — restic-builder: compile restic from upstream source.
 # Runs on the BUILDPLATFORM (the runner's native arch) and cross-compiles
 # to TARGETARCH/TARGETOS, which is faster than QEMU-emulating Go on arm64.
 # =============================================================================
-ARG GO_VERSION=1.26-bookworm
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS restic-builder
 
@@ -67,7 +72,6 @@ RUN /out/restic version || true
 # =============================================================================
 # Stage 2 — runtime: mariadb base + scripts + the compiled restic binary.
 # =============================================================================
-ARG MARIADB_VERSION=11.8
 
 FROM mariadb:${MARIADB_VERSION} AS runtime
 
