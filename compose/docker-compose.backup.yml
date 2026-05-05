@@ -1,0 +1,82 @@
+# ratatoskr — backup profile override.
+#
+# Loaded alongside docker-compose.yml. The unit3d-backup service is gated on
+# the `backup` profile, so plain `docker compose up` does not start it.
+#
+# Invocation patterns (see README.md "Backup & restore" for the full setup):
+#
+#   # Build the backup image
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml \
+#       --profile backup build unit3d-backup
+#
+#   # One-shot manual backup
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml \
+#       --profile backup run --rm unit3d-backup
+#
+#   # Restore drill (latest snapshot → ephemeral mariadbd → row counts)
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml \
+#       --profile backup run --rm unit3d-backup restore-test
+#
+#   # Restore (DESTRUCTIVE — stop MariaDB consumers first)
+#   docker compose stop unit3d unit3d-scheduler unit3d-queue
+#   docker compose stop mariadb
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml \
+#       --profile backup run --rm \
+#       -e RESTORE_FORCE=true unit3d-backup restore latest
+#   docker compose start mariadb
+#   docker compose start unit3d unit3d-scheduler unit3d-queue
+#
+# A wrapper script and host cron snippet are documented in README.md.
+
+name: ratatoskr
+
+services:
+  unit3d-backup:
+    # TODO(v0.2.0 release, commit #6): switch default to v0.2.0 once the
+    # tag is published to ghcr.io. Until then the image is built locally
+    # and tagged :dev, matching the pattern of ratatoskr/unit3d:dev.
+    image: ratatoskr/unit3d-backup:${BACKUP_VERSION:-dev}
+    build:
+      context: ..
+      dockerfile: docker/backup/Dockerfile
+      args:
+        MARIADB_VERSION: ${MARIADB_BACKUP_VERSION:-11.8}
+    profiles: [backup]
+    # One-shot semantics: run a single backup or restore command and exit.
+    # Cron / systemd timer on the host re-invokes; we never want a crash loop.
+    restart: "no"
+    env_file: .env.backup
+    environment:
+      # Service hostname inside the compose network. The backup script
+      # connects here over TCP for SQL coordination (FLUSH BACKUP STAGE,
+      # BACKUP_LOCK, binlog metadata) — the data-file copy is filesystem,
+      # not network, hence the volume mount below.
+      MARIADB_HOST: mariadb
+      # Compose mounts secrets at /run/secrets/<name>; the backup scripts
+      # natively read *_FILE env vars (Docker / K8s secret pattern).
+      MARIADB_PASSWORD_FILE: /run/secrets/mariadb_backup_password
+      RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+    secrets:
+      - mariadb_backup_password
+      - restic_password
+    # mariadb-backup performs a physical copy of InnoDB data files; it must
+    # have read access to the datadir. Restore (mariadb-backup --copy-back)
+    # additionally needs write access. Single mount kept RW for both paths;
+    # restore.sh has a RESTORE_FORCE guard that refuses to overwrite a
+    # non-empty datadir without explicit operator opt-in.
+    volumes:
+      # :rw is the default; explicit because this is a security-relevant
+      # decision. Restore (mariadb-backup --copy-back) needs write access;
+      # backup mode never writes (its codepath calls --backup, not --copy-back).
+      - mariadb-data:/var/lib/mysql:rw
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+# Top-level secrets block — backed by files under ./secrets/, gitignored.
+# Operators populate them once; see README.md for the setup commands.
+secrets:
+  mariadb_backup_password:
+    file: ./secrets/mariadb_backup_password
+  restic_password:
+    file: ./secrets/restic_password
