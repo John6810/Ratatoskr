@@ -27,7 +27,6 @@ images to ghcr.io with cosign signatures and SBOM attestations.
   performs the destructive copy-back, `restore-test.sh` runs an
   end-to-end drill in an ephemeral mariadbd. Runs as the existing
   `mysql` user (UID 999), tini PID 1 for clean signal handling.
-  ([bbab182](https://github.com/John6810/Ratatoskr/commit/bbab182))
 - Compose `--profile backup` override —
   `compose/docker-compose.backup.yml` with the `unit3d-backup`
   service. RW mount on `mariadb-data` (single-service Pattern X),
@@ -37,32 +36,37 @@ images to ghcr.io with cosign signatures and SBOM attestations.
   shell/SQL/JSON safety. Manual SQL snippet documented in the
   README for the MariaDB backup user — uniform across fresh and
   v0.1 upgrade paths.
-  ([e128dd9](https://github.com/John6810/Ratatoskr/commit/e128dd9))
 - CI matrix — `.github/workflows/docker-build.yml` refactored to
   build two images in parallel (`unit3d` and `ratatoskr-backup`),
   each with its own tag plan, Trivy scan, and cosign signature.
   The `unit3d` image gets a `:ratatoskr-vX.Y.Z` alias on a tag
   push for release traceability without polluting `:latest`. Cache
   scoped per cell to avoid layer collisions.
-  ([aad9850](https://github.com/John6810/Ratatoskr/commit/aad9850))
 - Multi-arch publishing pipeline — first hardening pass of the v0.1
   CI: amd64 + arm64 build, Trivy gate, cosign keyless signing, SBOM
   and provenance attestations, action versions pinned by full SHA,
   default-deny top-level permissions. Dependabot configured to
   track GitHub Actions weekly.
-  ([38463ed](https://github.com/John6810/Ratatoskr/commit/38463ed),
-   [4ca3979](https://github.com/John6810/Ratatoskr/commit/4ca3979),
-   [75def51](https://github.com/John6810/Ratatoskr/commit/75def51))
 - `restore-drill` Claude Code skill — wraps `restore-test.sh` and
   gates any commit touching the backup pipeline. Working-tree
   semantics via bind-mount (no rebuild needed for script-only
   edits). Strict by design: no bypass flag, no cooldown, no
   auto-startup of the stack. Pre-flight aborts with actionable
   error messages.
-  ([d1d2b48](https://github.com/John6810/Ratatoskr/commit/d1d2b48))
 
 ### 🐛 Fixes
 
+- Restic compiled from source — the upstream restic 0.18.1 binary
+  is built with Go 1.25.1, which carries 9 stdlib CVEs (TLS, x509,
+  URL parsing) that upstream has not yet rebuilt against a patched
+  Go. The backup image now compiles restic from the v0.18.1 git
+  tag (commit SHA verified at clone time) using a current Go
+  toolchain in a builder stage. Same restic version, clean Trivy
+  CRITICAL/HIGH posture. The pinned ARG is now the upstream commit
+  SHA instead of a binary checksum — equivalent supply-chain
+  assurance via a different mechanism. Also drops the unused
+  `gosu` shipped by the mariadb base image (never invoked by the
+  ratatoskr-backup entrypoint), removing 9 additional CVEs.
 - Backup secret leakage guards — wrap the mariadb-backup pipeline
   in a `do_backup()` function and inline `MYSQL_PWD` only at the
   call site, so the password is never bound to a named shell
@@ -70,7 +74,6 @@ images to ghcr.io with cosign signatures and SBOM attestations.
   print. `restore.sh` `chown` failure is now logged loudly instead
   of silently swallowed, surfacing partially-unreadable datadirs
   before mysqld refuses to start.
-  ([97a5939](https://github.com/John6810/Ratatoskr/commit/97a5939))
 - Stack table accuracy — `README.md` MeiliSearch `v1.11` →
   `v1.43` (matches the compose pin), and the Reverb / WebSocket
   row dropped to match v9.2.0 reality (CLAUDE.md was already
@@ -79,13 +82,10 @@ images to ghcr.io with cosign signatures and SBOM attestations.
   (unreadable by the `mysql`-UID container) to a Docker secret +
   `RESTIC_SSH_COMMAND`, with both TOFU and pre-populated
   `known_hosts` paths documented.
-  ([7643817](https://github.com/John6810/Ratatoskr/commit/7643817),
-   [b251acf](https://github.com/John6810/Ratatoskr/commit/b251acf))
 - Trivy false-positive sweep — purge `linux-libc-dev` from the
   runtime image so the kernel-headers package no longer triggers
   CVE-against-the-kernel matches in scans. The runtime never
   needs kernel headers (FrankenPHP is userland only).
-  ([38b895c](https://github.com/John6810/Ratatoskr/commit/38b895c))
 
 ### 📚 Docs
 
@@ -104,14 +104,12 @@ images to ghcr.io with cosign signatures and SBOM attestations.
   boundaries on what the pipeline does and does not protect
   against. `THIRD_PARTY_LICENSES.md` adds AGPL attribution for
   the seven embedded components and an FSF compatibility table.
-  ([fb4e0ba](https://github.com/John6810/Ratatoskr/commit/fb4e0ba))
 - Long-term roadmap — `docs/ROADMAP.md` from v0.2 (Backup &
   Restore) through v1.0 (Polish & Promotion). Nine intermediate
   releases each with an explicit scale envelope: K8s overlay, S3
   storage migration, Helm chart, dedicated `/announce` daemon, DB
   scale, observability, Terraform IaC. Principles up front, what
   ratatoskr is not, what is out of scope.
-  ([24bec47](https://github.com/John6810/Ratatoskr/commit/24bec47))
 
 ### Versions pinned
 
@@ -122,7 +120,8 @@ images to ghcr.io with cosign signatures and SBOM attestations.
 | MariaDB | `11` (currently 11.8.6 LTS, EOL 2028-06-04) |
 | Redis | `7-alpine` (currently 7.4.8) |
 | MeiliSearch | `v1.43` |
-| Restic (backup image) | `0.18.1` (new — upstream binary, SHA-pinned) |
+| Restic (backup image) | `v0.18.1` (new — compiled from source, commit SHA pinned) |
+| Go (build toolchain) | `1.26-bookworm` (currently 1.26.2; builds the restic binary) |
 
 ### ⚠️ Breaking
 

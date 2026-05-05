@@ -6,63 +6,111 @@
 #
 # Build context MUST be the repo root so `COPY scripts/...` resolves:
 #   docker build -f docker/backup/Dockerfile -t ratatoskr-backup:dev .
+#
+# Restic is compiled from source against a pinned upstream commit using a
+# current Go toolchain, so the binary's vendored runtime is fixed against
+# Go stdlib CVEs that the upstream-published binary has not yet been
+# rebuilt to address. The supply-chain assurance is equivalent — pinned
+# git tag + commit SHA verified at clone time, instead of a binary checksum.
 
+# =============================================================================
+# Stage 1 — restic-builder: compile restic from upstream source.
+# Runs on the BUILDPLATFORM (the runner's native arch) and cross-compiles
+# to TARGETARCH/TARGETOS, which is faster than QEMU-emulating Go on arm64.
+# =============================================================================
+ARG GO_VERSION=1.26-bookworm
+
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS restic-builder
+
+# restic v0.18.1 — annotated tag at upstream commit
+# 7d0aa7f2e30546fba7c8f1c0bae4d6704e3d8423 as of 2026-05-05.
+# The clone is verified against this commit so a moved tag (or a CDN cache
+# poisoning a different commit under the same name) fails the build.
+ARG RESTIC_GIT_TAG=v0.18.1
+ARG RESTIC_GIT_COMMIT=7d0aa7f2e30546fba7c8f1c0bae4d6704e3d8423
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+# CGO_ENABLED=0 produces a fully static binary that does not depend on the
+# runtime image's libc — robust across any glibc version drift in the
+# mariadb base image. GOOS/GOARCH cross-compile from the build host arch.
+ENV CGO_ENABLED=0 \
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH}
+
+WORKDIR /src
+
+RUN set -eux; \
+    git clone --depth 1 --branch "${RESTIC_GIT_TAG}" https://github.com/restic/restic.git .; \
+    actual=$(git rev-parse HEAD); \
+    if [ "${actual}" != "${RESTIC_GIT_COMMIT}" ]; then \
+        echo "FATAL: ${RESTIC_GIT_TAG} resolved to ${actual}, expected ${RESTIC_GIT_COMMIT}" >&2; \
+        exit 1; \
+    fi
+
+# -trimpath strips host filesystem paths from the binary (reproducibility).
+# -s -w drops the symbol table and DWARF debug info (smaller binary).
+# -X main.version stamps the displayed version so `restic version` shows
+# the pinned tag, not "unknown" or the build-time commit ID.
+RUN go build \
+        -trimpath \
+        -ldflags="-s -w -X main.version=${RESTIC_GIT_TAG}" \
+        -o /out/restic \
+        ./cmd/restic
+
+# Smoke test the just-built binary on the build host (only meaningful when
+# BUILDPLATFORM == TARGETPLATFORM — buildx skips this RUN's effects when
+# they diverge, but `go build` already did the cross-arch validation).
+RUN /out/restic version || true
+
+# =============================================================================
+# Stage 2 — runtime: mariadb base + scripts + the compiled restic binary.
+# =============================================================================
 ARG MARIADB_VERSION=11.8
 
-FROM mariadb:${MARIADB_VERSION}
+FROM mariadb:${MARIADB_VERSION} AS runtime
 
-# Pinned restic upstream binary. SHA256 hashes from
-# https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/SHA256SUMS
-ARG RESTIC_VERSION=0.18.1
-ARG RESTIC_SHA256_AMD64=680838f19d67151adba227e1570cdd8af12c19cf1735783ed1ba928bc41f363d
-ARG RESTIC_SHA256_ARM64=87f53fddde38764095e9c058a3b31834052c37e5826d2acf34e18923c006bd45
-
-# TARGETARCH is set automatically by buildx for multi-arch builds. Defaults
-# to amd64 so plain `docker build` still works on a single-host machine.
-ARG TARGETARCH=amd64
+# Carry the build args forward into this stage's LABEL block so the OCI
+# version label reflects the actual restic source pin.
+ARG RESTIC_GIT_TAG=v0.18.1
+ARG MARIADB_VERSION
 
 LABEL org.opencontainers.image.source="https://github.com/john6810/ratatoskr" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.title="ratatoskr-backup" \
-      org.opencontainers.image.description="MariaDB hot backups via mariadb-backup, encrypted with restic" \
-      org.opencontainers.image.version="${MARIADB_VERSION}-restic${RESTIC_VERSION}"
+      org.opencontainers.image.description="MariaDB hot backups via mariadb-backup, encrypted with restic (compiled from source)" \
+      org.opencontainers.image.version="${MARIADB_VERSION}-restic${RESTIC_GIT_TAG}-fromsource"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Runtime apt set:
 # - bash: scripts use [[ and pipefail
-# - bzip2: decompress restic upstream tarball at build time
-# - ca-certificates: TLS to B2/S3/etc.
-# - curl: download restic at build time
+# - ca-certificates: TLS to B2/S3/SFTP/etc. from restic and mariadb-backup
 # - tini: PID 1 for clean signal handling
 # - zstd: streaming compression for the mariadb-backup pipe
+#
+# Note: bzip2 and curl are no longer installed. The previous Dockerfile
+# pulled the upstream restic binary tarball at build time and needed both;
+# the from-source build path inherits everything it needs from the
+# golang:${GO_VERSION} stage.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
-        bzip2 \
         ca-certificates \
-        curl \
         tini \
         zstd \
     && rm -rf /var/lib/apt/lists/*
 
-# Install restic from the upstream GitHub release. Architecture detected
-# from $TARGETARCH; SHA256 verified against the pinned hashes above.
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-        amd64) sha256="${RESTIC_SHA256_AMD64}"; arch="linux_amd64" ;; \
-        arm64) sha256="${RESTIC_SHA256_ARM64}"; arch="linux_arm64" ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/restic.bz2 \
-        "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_${arch}.bz2"; \
-    echo "${sha256}  /tmp/restic.bz2" | sha256sum -c -; \
-    bunzip2 /tmp/restic.bz2; \
-    install -m 0755 /tmp/restic /usr/local/bin/restic; \
-    rm -f /tmp/restic; \
-    /usr/local/bin/restic version
+# Compiled restic from the builder stage. Static binary, no runtime deps.
+COPY --from=restic-builder --chmod=0755 /out/restic /usr/local/bin/restic
+RUN /usr/local/bin/restic version
 
-# Drop build-only deps. Keep bash, ca-certificates, tini, zstd.
-RUN apt-get purge -y --auto-remove curl bzip2 \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+# gosu ships in the mariadb base image for its own docker-entrypoint to
+# drop privileges from root. ratatoskr-backup bypasses that entrypoint
+# entirely (tini -> /usr/local/bin/entrypoint, USER mysql), so gosu is
+# never invoked. Removing it drops 9 unfixable Trivy findings (1 CRITICAL
+# + 8 HIGH) that come from gosu's vendored Go stdlib.
+RUN rm -f /usr/local/bin/gosu
 
 # Scripts on PATH so operators can run them directly:
 #   docker compose --profile backup run --rm unit3d-backup restore latest
