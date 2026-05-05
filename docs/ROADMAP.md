@@ -27,7 +27,7 @@ First public release. Single-host stack runnable in 5 minutes.
 
 **Scale envelope**: 50–500 active users, single VPS.
 
-### v0.2.0 — Backup & Restore — In progress 🚧
+### v0.2.0 — Backup & Restore — Released 2026-05-05 ✅
 
 The piece that makes v0.1 actually deployable for real.
 

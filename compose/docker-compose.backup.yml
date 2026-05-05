@@ -32,10 +32,11 @@ name: ratatoskr
 
 services:
   unit3d-backup:
-    # TODO(v0.2.0 release, commit #6): switch default to v0.2.0 once the
-    # tag is published to ghcr.io. Until then the image is built locally
-    # and tagged :dev, matching the pattern of ratatoskr/unit3d:dev.
-    image: ratatoskr/unit3d-backup:${BACKUP_VERSION:-dev}
+    # Default tracks the ratatoskr release (v0.2.0). The image is local
+    # by convention (ratatoskr/...) — operators run `docker compose ...
+    # build unit3d-backup` once. To pin a specific release, override
+    # BACKUP_VERSION in compose/.env or in the host shell.
+    image: ratatoskr/unit3d-backup:${BACKUP_VERSION:-v0.2.0}
     build:
       context: ..
       dockerfile: docker/backup/Dockerfile

@@ -63,12 +63,14 @@ Each level has its own guide in [`docs/`](./docs).
 
 ## 🗺️ Roadmap
 
-- **v0.1.0** — Compose MVP (Dockerfile + working stack)
-- **v0.2.0** — Hardening, healthchecks, backup scripts
-- **v0.3.0** — Kustomize base manifests
-- **v0.4.0** — Production overlays (HPA, NetworkPolicy, ArgoCD)
+- **v0.1.0** ✅ — Compose MVP (Dockerfile + working stack) — Released 2026-05-04
+- **v0.2.0** ✅ — Backup & restore (mariadb-backup + Restic, restore drill, operator guide) — Released 2026-05-05
+- **v0.3.0** — Kubernetes production overlay (Kustomize, HPA, NetworkPolicy, ArgoCD)
+- **v0.4.0** — S3 storage migration (stateless app tier)
 - **v0.5.0** — Helm chart on Artifact Hub
-- **v1.0.0** — Terraform modules + full docs
+- **v1.0.0** — Terraform IaC + dedicated `/announce` daemon + full docs
+
+The full version-by-version roadmap with scale envelopes is in [docs/ROADMAP.md](./docs/ROADMAP.md).
 
 ---
 
