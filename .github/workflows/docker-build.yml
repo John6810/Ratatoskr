@@ -1,9 +1,25 @@
 name: docker-build
 
 # Triggers:
-#   - push to main: builds + pushes :main, signs the digest
-#   - push of tag v*: builds + pushes :vX.Y.Z, :X.Y, :latest, signs
-#   - pull_request to main: builds + scans only (no push, no sign)
+#   - push to main:    builds + pushes :main, signs the digest
+#   - push of tag v*:  builds + pushes the per-image tag plan, signs
+#   - pull_request:    builds + scans only (no push, no sign)
+#
+# Two images are built in parallel via a strategy matrix:
+#   ghcr.io/john6810/unit3d            UNIT3D on FrankenPHP
+#   ghcr.io/john6810/ratatoskr-backup  mariadb-backup + restic
+#
+# Tag plans differ deliberately:
+#   unit3d   : driven by Dockerfile ARG UNIT3D_VERSION (decoupled from
+#              ratatoskr git tag). On any push: :v9.2.0, :9.2, :9. On a
+#              git tag v* push: also :ratatoskr-v0.2.0 alias for traceability.
+#              No :latest — the image version is driven by the ARG, not the
+#              git ref, so :latest would re-point to the same image on every
+#              ratatoskr release without an UNIT3D bump.
+#   backup   : 1:1 with ratatoskr git tag. On a git tag v0.2.0 push:
+#              :v0.2.0, :0.2, :0, :latest. Backup tooling and ratatoskr
+#              release evolve in lockstep, so :latest stays meaningful.
+
 on:
   push:
     branches: [main]
@@ -15,11 +31,41 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE_NAME: ghcr.io/john6810/unit3d
-
 jobs:
+  # Extract pinned versions from the Dockerfiles in one place. Outputs are
+  # consumed by the matrix to compute image tags and build-args.
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      unit3d:       ${{ steps.extract.outputs.unit3d }}
+      unit3d_minor: ${{ steps.extract.outputs.unit3d_minor }}
+      unit3d_major: ${{ steps.extract.outputs.unit3d_major }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Extract versions from Dockerfiles
+        id: extract
+        run: |
+          full=$(grep -oE 'ARG UNIT3D_VERSION=\S+' docker/Dockerfile | head -1 | cut -d= -f2-)
+          # full = "v9.2.0" -> derive minor (9.2) and major (9) floating aliases.
+          stripped=${full#v}
+          minor=${stripped%.*}
+          major=${stripped%%.*}
+          {
+            echo "unit3d=${full}"
+            echo "unit3d_minor=${minor}"
+            echo "unit3d_major=${major}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved UNIT3D_VERSION=${full} (minor=${minor} major=${major})"
+          # MARIADB_VERSION is intentionally NOT extracted: the backup
+          # Dockerfile's ARG default is the single source of truth, and the
+          # workflow lets the build use that default. Bumping MariaDB is a
+          # Dockerfile-only change with no workflow churn.
+
   build:
+    needs: versions
+    name: build (${{ matrix.name }})
     runs-on: ubuntu-latest
 
     permissions:
@@ -27,16 +73,50 @@ jobs:
       packages: write      # push to ghcr.io
       id-token: write      # OIDC token for cosign keyless signing
 
+    # fail-fast: false so a Trivy or build failure on one cell does not abort
+    # the other — we still want to know whether the sibling image is healthy.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: unit3d
+            image: ghcr.io/john6810/unit3d
+            dockerfile: docker/Dockerfile
+            build_args: |
+              UNIT3D_VERSION=${{ needs.versions.outputs.unit3d }}
+            tags: |
+              type=raw,value=${{ needs.versions.outputs.unit3d }}
+              type=raw,value=${{ needs.versions.outputs.unit3d_minor }}
+              type=raw,value=${{ needs.versions.outputs.unit3d_major }}
+              type=raw,value=ratatoskr-${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+              type=ref,event=branch
+              type=ref,event=pr
+            flavor: |
+              latest=false
+
+          - name: backup
+            image: ghcr.io/john6810/ratatoskr-backup
+            dockerfile: docker/backup/Dockerfile
+            # No build_args: the backup Dockerfile's ARG MARIADB_VERSION
+            # default (11.8) is the source of truth.
+            build_args: ''
+            # `pattern=v{{version}}` not `{{version}}` — node-semver strips
+            # the v prefix when parsing the source git tag, so without the
+            # explicit `v` in the pattern the published tag would be :0.2.0
+            # not :v0.2.0. The major and minor floats stay v-less on purpose
+            # (operators pin :0.2 / :0, not :v0.2 / :v0).
+            tags: |
+              type=semver,pattern=v{{version}}
+              type=semver,pattern={{major}}.{{minor}}
+              type=semver,pattern={{major}}
+              type=ref,event=branch
+              type=ref,event=pr
+            flavor: |
+              latest=auto
+
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Extract UNIT3D_VERSION from Dockerfile
-        id: unit3d
-        run: |
-          version=$(grep -oE 'ARG UNIT3D_VERSION=\S+' docker/Dockerfile | head -1 | cut -d= -f2)
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Resolved UNIT3D_VERSION=${version}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
@@ -47,9 +127,9 @@ jobs:
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GHCR
-        # Skip on PR — fork PRs only have a read-only GITHUB_TOKEN, login would
-        # fail. Branch PRs from the same repo could log in but we never push
-        # from a PR build, so logging in serves no purpose.
+        # Skip on PR — fork PRs only have a read-only GITHUB_TOKEN, login
+        # would fail. Same-repo PRs could log in but never push, so logging
+        # in serves no purpose.
         if: github.event_name != 'pull_request'
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
@@ -61,62 +141,53 @@ jobs:
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
-          images: ${{ env.IMAGE_NAME }}
-          # Tag plan:
-          #   push to main          -> :main
-          #   PR (build only)       -> :pr-<num>
-          #   tag v0.2.0            -> :v0.2.0, :0.2, :latest (via flavor)
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-          flavor: |
-            latest=auto
+          images: ${{ matrix.image }}
+          tags: ${{ matrix.tags }}
+          flavor: ${{ matrix.flavor }}
 
       # First build: amd64 only, loaded into the local Docker daemon so Trivy
-      # can scan it. Multi-platform builds cannot be `--load`ed; we run a
-      # second multi-arch build below that hits the same gha cache and is
-      # therefore near-free. Splitting like this lets Trivy gate the push.
+      # can scan it. Multi-platform builds cannot be `--load`ed; the second
+      # multi-arch build below hits the same gha cache and is therefore
+      # near-free. Splitting like this lets Trivy gate the push per cell.
       - name: Build for scan (linux/amd64, load locally)
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          file: docker/Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           load: true
-          tags: ratatoskr-scan:${{ github.sha }}
-          build-args: |
-            UNIT3D_VERSION=${{ steps.unit3d.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ratatoskr-scan:${{ matrix.name }}-${{ github.sha }}
+          build-args: ${{ matrix.build_args }}
+          # Cache scope per cell — unit3d and backup share no useful layers
+          # and would only contend on a single shared scope.
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
       - name: Trivy vulnerability scan (CRITICAL, HIGH)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ratatoskr-scan:${{ github.sha }}
+          image-ref: ratatoskr-scan:${{ matrix.name }}-${{ github.sha }}
           severity: CRITICAL,HIGH
           exit-code: '1'
           ignore-unfixed: true
           vuln-type: os,library
           format: table
 
-      # Multi-arch build + push. PR runs build only (push=false) — same cache,
-      # validates the arm64 build path without publishing.
+      # Multi-arch build + push. PR runs build only (push=false) — same
+      # cache, validates the arm64 build path without publishing.
       - name: Build & push (linux/amd64,linux/arm64)
         id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          file: docker/Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            UNIT3D_VERSION=${{ steps.unit3d.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
           provenance: mode=max
           sbom: true
 
@@ -125,11 +196,12 @@ jobs:
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
 
       # Keyless OIDC signing. The signature is bound to the manifest digest,
-      # which is shared across every tag pushed in the prior step — one
-      # cosign call covers them all.
+      # which is shared across every tag pushed in the prior step for this
+      # cell — one cosign call covers them all.
       - name: Sign image manifest (cosign keyless)
         if: github.event_name != 'pull_request'
         env:
+          IMAGE: ${{ matrix.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+          cosign sign --yes "${IMAGE}@${DIGEST}"
