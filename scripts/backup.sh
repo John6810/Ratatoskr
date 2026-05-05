@@ -28,16 +28,6 @@ set -euo pipefail
 : "${MARIADB_USER:?MARIADB_USER is required}"
 : "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY is required}"
 
-# Resolve secrets from *_FILE env vars when set (Docker/K8s secret pattern).
-# We deliberately do NOT export MARIADB_PASSWORD — exporting leaks it into
-# /proc/<pid>/environ of every child process. Instead the password is passed
-# only to mariadb-backup, via MYSQL_PWD on the command line below (read by
-# mariadb tools natively, never visible in `ps aux` argv).
-if [[ -n "${MARIADB_PASSWORD_FILE:-}" ]]; then
-    MARIADB_PASSWORD="$(< "${MARIADB_PASSWORD_FILE}")"
-fi
-: "${MARIADB_PASSWORD:?MARIADB_PASSWORD or MARIADB_PASSWORD_FILE is required}"
-
 if [[ -z "${RESTIC_PASSWORD:-}" && -z "${RESTIC_PASSWORD_FILE:-}" ]]; then
     echo "RESTIC_PASSWORD or RESTIC_PASSWORD_FILE is required" >&2
     exit 1
@@ -60,24 +50,34 @@ fi
 echo "[backup] streaming mariadb-backup -> zstd -${ZSTD_LEVEL} -> restic"
 echo "[backup]   host=${MARIADB_HOST} user=${MARIADB_USER} parallel=${MARIABACKUP_PARALLEL} tag=${BACKUP_TAG}"
 
-# pipefail (set above) propagates a non-zero exit from any stage.
-# mariadb-backup writes the xbstream archive to stdout; zstd compresses;
-# restic reads stdin and pushes a single binary blob into the repository.
-#
-# MYSQL_PWD is consumed natively by mariadb-backup. It is set inline so the
-# variable propagates only to that one process — not to zstd, not to restic.
-# `--password=` on argv would expose the secret in `ps aux`; we avoid it.
-MYSQL_PWD="${MARIADB_PASSWORD}" mariadb-backup --backup \
-    --stream=xbstream \
-    --user="${MARIADB_USER}" \
-    --host="${MARIADB_HOST}" \
-    --parallel="${MARIABACKUP_PARALLEL}" \
-| zstd "-${ZSTD_LEVEL}" --threads=0 \
-| restic backup \
-    --stdin \
-    --stdin-filename="mariadb.xbstream.zst" \
-    --tag "${BACKUP_TAG}" \
-    --host "${BACKUP_HOSTNAME}"
+# Wrap the pipeline in a function so the MariaDB password can be inlined as
+# MYSQL_PWD on the call site only — the variable is bound just for the
+# duration of the function call, never enters the parent shell scope, and
+# survives `set -x` because it is never assigned to a named shell variable.
+# MYSQL_PWD is read natively by mariadb-backup; --password= on argv would
+# expose it in `ps aux`, which is exactly what we are avoiding.
+do_backup() {
+    mariadb-backup --backup \
+        --stream=xbstream \
+        --user="${MARIADB_USER}" \
+        --host="${MARIADB_HOST}" \
+        --parallel="${MARIABACKUP_PARALLEL}" \
+    | zstd "-${ZSTD_LEVEL}" --threads=0 \
+    | restic backup \
+        --stdin \
+        --stdin-filename="mariadb.xbstream.zst" \
+        --tag "${BACKUP_TAG}" \
+        --host "${BACKUP_HOSTNAME}"
+}
+
+if [[ -n "${MARIADB_PASSWORD_FILE:-}" ]]; then
+    MYSQL_PWD="$(< "${MARIADB_PASSWORD_FILE}")" do_backup
+elif [[ -n "${MARIADB_PASSWORD:-}" ]]; then
+    MYSQL_PWD="${MARIADB_PASSWORD}" do_backup
+else
+    echo "MARIADB_PASSWORD or MARIADB_PASSWORD_FILE is required" >&2
+    exit 1
+fi
 
 echo "[backup] snapshot stored"
 
