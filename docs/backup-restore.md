@@ -300,14 +300,69 @@ For TLS MinIO, drop the `http://` scheme; Restic defaults to HTTPS:
 RESTIC_REPOSITORY=sftp:<user>@<host>:/opt/restic-repos/ratatoskr
 ```
 
-The backup container must have the remote host's SSH key in its known_hosts and
-a private key mounted at `/root/.ssh/id_ed25519`. Add to
-`docker-compose.backup.yml` under `unit3d-backup.volumes`:
+The backup container runs as the `mysql` user (UID 999) which has no shell
+home and no `~/.ssh` directory. Mounting an SSH key at `/root/.ssh/` would
+silently fail because that path is not readable by UID 999. The supported
+pattern is to ship the SSH key as a Docker secret (mounted at
+`/run/secrets/<name>`, world-readable inside the container) and tell Restic
+to use a custom SSH invocation via `RESTIC_SSH_COMMAND`.
+
+**Step 1 — generate the key pair on the host and chmod the private key:**
+
+```bash
+ssh-keygen -t ed25519 -N '' -f compose/secrets/sftp_id_ed25519 -C ratatoskr-backup
+chmod 600 compose/secrets/sftp_id_ed25519
+# Push the .pub file to the SFTP server's authorized_keys for the backup user.
+```
+
+**Step 2 — add the secret to `compose/docker-compose.backup.yml`:**
 
 ```yaml
-- ./secrets/sftp_key:/root/.ssh/id_ed25519:ro
-- ./secrets/known_hosts:/root/.ssh/known_hosts:ro
+secrets:
+  sftp_ssh_key:
+    file: ./secrets/sftp_id_ed25519
+  sftp_known_hosts:
+    file: ./secrets/sftp_known_hosts
+
+services:
+  unit3d-backup:
+    secrets:
+      - sftp_ssh_key
+      - sftp_known_hosts
+    environment:
+      RESTIC_SSH_COMMAND: "ssh -i /run/secrets/sftp_ssh_key -o UserKnownHostsFile=/run/secrets/sftp_known_hosts -o StrictHostKeyChecking=yes"
 ```
+
+**Step 3 — populate `known_hosts` (two strategies):**
+
+The hardened path: pre-fetch the host fingerprint on a trusted network, commit
+the file as a secret, and keep `StrictHostKeyChecking=yes` so any future
+fingerprint change aborts the connection.
+
+```bash
+ssh-keyscan -H sftp.example.com > compose/secrets/sftp_known_hosts
+chmod 600 compose/secrets/sftp_known_hosts
+# Verify the fingerprint out-of-band against your SFTP provider's documentation.
+```
+
+The quick path (one-shot tests, accept-on-first-connect TOFU): swap the
+`StrictHostKeyChecking` and `UserKnownHostsFile` options in the
+`RESTIC_SSH_COMMAND` value:
+
+```yaml
+    environment:
+      RESTIC_SSH_COMMAND: "ssh -i /run/secrets/sftp_ssh_key -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/var/lib/mysql/.ssh/known_hosts"
+```
+
+`accept-new` trusts whatever fingerprint shows up on first connect and pins
+it. This is fine for one-shot testing but a MITM at first connect is not
+detectable. Production deployments should use the hardened path.
+
+> ⚠️ Docker secrets are mounted at `/run/secrets/<name>` with mode `0444`
+> (world-readable inside the container). The host file should be `chmod 600`
+> so it is not readable by other users on the host. Inside the container,
+> the `mysql` user can read the secret because the secret tmpfs mount is
+> world-readable by Docker design.
 
 ### Local path
 

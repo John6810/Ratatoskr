@@ -57,8 +57,7 @@ Each level has its own guide in [`docs/`](./docs).
 | App | `ghcr.io/john6810/unit3d:v9.2.0` (FrankenPHP) |
 | Database | MariaDB 11 |
 | Cache & queues | Redis 7 |
-| Search | MeiliSearch v1.11 |
-| WebSockets | Laravel Reverb |
+| Search | MeiliSearch v1.43 |
 
 ---
 
