@@ -44,32 +44,34 @@ The piece that makes v0.1 actually deployable for real.
 
 ### v0.3.0 — Kubernetes Production Overlay 📋
 
-The first real Kubernetes deployment path. Targets a 3-node cluster.
+The first real Kubernetes deployment path. Targets a 3-node cluster. Architectural decisions captured in [ADR-0001](./adr/0001-database-deployment-topology.md), [ADR-0002](./adr/0002-storage-strategy-unit3d-storage.md), [ADR-0003](./adr/0003-ingress-controller-assumption.md), and [ADR-0004](./adr/0004-secret-management.md).
 
 - `kustomize/base/` for all components, overlays for `dev` / `staging` / `prod`
-- StatefulSet MariaDB with `csi-rawfile` or equivalent, PVC for data
-- Deployment + HorizontalPodAutoscaler on `unit3d-app` (CPU + KEDA Redis-queue-length)
+- **MariaDB**: embedded StatefulSet by default, Kustomize toggle for managed DB (RDS, Aiven, OVH). HA topology deferred to v0.7.
+- **`unit3d-storage`**: hybrid — three disks (`torrent-files`, `subtitle-files`, `attachment-files`) on operator-supplied S3-compatible storage; image disks (avatars, covers, banners, etc.) on PVC. Vanilla UNIT3D image preserved via ConfigMap-mounted `config/filesystems.php` override. Two prod modes: RWX storage class → multi-replica HA; RWO only → `replicas: 1` + `Recreate`.
+- Deployment + HorizontalPodAutoscaler on `unit3d-app` (CPU + KEDA Redis-queue-length) — effective in RWX mode at v0.3
 - Separate Deployments for queue worker and scheduler (CronJob)
 - NetworkPolicy default-deny + explicit allows (CoreDNS egress, intra-namespace, ingress)
 - PodDisruptionBudget on every workload with HPA
-- Ingress via Traefik IngressRoute + cert-manager (Let's Encrypt)
+- **Ingress**: default Traefik `IngressRoute` + cert-manager (Let's Encrypt); alternative cluster-agnostic `Ingress` overlay for nginx-ingress / AWS ALB / GCE. TLS-source toggle for upstream-LB termination (Cloudflare, ACM). `/announce` middleware constraints documented as hard rules in `.claude/rules/k8s.md`; trusted proxy headers mandatory.
+- **Secrets**: sealed-secrets default + external-secrets-operator alternative via Kustomize component. `<component>-secrets` naming convention. `APP_KEY` operator-supplied by default; opt-in self-bootstrap Job for first-time operators.
 - ArgoCD `ApplicationSet` template for GitOps adoption
-- `kustomize-validate` skill catches manifest drift before commit
-- `k8s-reviewer` agent runs on every PR touching manifests
+- `kustomize-validate` skill catches manifest drift before commit; `k8s-reviewer` agent runs on every PR touching manifests
+- **Migration policy**: targets fresh deployments. Existing v0.1/v0.2 Compose operators stay on Compose until v0.4 ships unified migration tooling.
 
-**Scale envelope**: 5,000–10,000 active users on a 3-node cluster.
+**Scale envelope**: 5,000–10,000 active users on a 3-node cluster (RWX mode). RWO mode caps at single-replica throughput.
 
-### v0.4.0 — S3 Storage Migration 📋
+### v0.4.0 — S3 Storage Migration & Full Statelessness 📋
 
-Removes the single-replica RWO ceiling for the application tier.
+Completes the storage abstraction from v0.3 and ships migration tooling. **Hard-depends on upstream UNIT3D PRs** tracked in [docs/upstream-prs.md](./upstream-prs.md) — specifically the Storage-aware refactor of image-handling controllers (avatars, icons, covers, banners, article/category/playlist images, `temporary-nfos`). Without those PRs, image disks remain PVC-bound and `unit3d-app` cannot be fully stateless.
 
-- Laravel `FILESYSTEM_DISK=s3` configuration baked into overlays
+- Storage-aware writes land upstream → image disks flip from `local` to `s3` in the `config/filesystems.php` override (same ConfigMap pattern as v0.3, no manifest rewrite)
 - Documented backends: MinIO (self-hosted), Cloudflare R2 (zero egress), Backblaze B2 (cheap), AWS S3 (default mental model)
-- Migration script for existing Compose / K3s deployments (avatars, banners, `.torrent` files)
-- Bucket policies, lifecycle rules, sample CORS config
-- `unit3d-app` becomes truly stateless → `replicas: N` works
+- **Unified migration tool**: covers both Compose → K8s relocation and PVC → S3 split (Storage-aware disks at v0.3, image disks once upstream lands) in one pass. v0.1/v0.2 operators become first-class upgrade citizens at v0.4.
+- Bucket policies, lifecycle rules, sample CORS config; storage-side backup story (S3 versioning + cross-region replication; PVC snapshots if any image disks remain)
+- `unit3d-app` becomes truly stateless once upstream lands → `replicas: N` works on any cluster, RWX no longer required for HA
 
-**Scale envelope**: app tier scales freely. DB and `/announce` become the next bottlenecks.
+**Scale envelope**: app tier scales freely. DB and `/announce` become the next bottlenecks. Conditional on upstream PRs; otherwise inherits the v0.3 RWX scale envelope.
 
 ### v0.5.0 — Helm Chart 📋
 
