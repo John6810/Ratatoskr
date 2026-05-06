@@ -18,7 +18,6 @@ A modern, opinionated deployment stack for [UNIT3D Community Edition](https://gi
 - 🐘 **FrankenPHP** runtime — single binary, worker mode, no nginx + php-fpm dance
 - 📦 **Multi-level deployment** — from `docker compose up` to full GitOps
 - 🔍 **MeiliSearch** wired in — fulltext torrent search out of the box
-- 🔌 **Reverb** included — Laravel-native WebSockets for chat & live notifications
 - 🔄 **GitOps-ready** — ArgoCD `ApplicationSet` template provided
 - 🛡️ **Production hardening** — NetworkPolicies, PDB, HPA, SealedSecrets
 
