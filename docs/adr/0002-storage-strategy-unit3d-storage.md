@@ -1,6 +1,6 @@
 # ADR-0002: Storage strategy for `unit3d-storage` — RWO PVC vs S3-compatible from day one
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-06
 - **Deciders**: <leave blank for now>
 - **Tags**: `storage`, `kubernetes`, `laravel`
