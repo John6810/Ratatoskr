@@ -16,16 +16,24 @@ spec:
       terminationGracePeriodSeconds: 30
       # The upstream getmeili/meilisearch:v1.43 image runs as root by default
       # (verified via `docker inspect` at v0.3 scaffolding: Config.User is empty,
-      # /meili_data is root:root). ratatoskr runs it as UID/GID 1000 with
-      # fsGroup 1000 — the /bin/meilisearch binary is +x for all, the PVC mount
-      # at /meili_data becomes group-writable via fsGroup, and Meilisearch
-      # writes only to MEILI_DB_PATH (default /meili_data) plus its dumps and
-      # snapshots subdirs (also under /meili_data).
+      # /meili_data is root:root). ratatoskr runs it as UID/GID 65532 — the
+      # conventional "nonroot" UID used by distroless and hardened container
+      # ecosystems (Google distroless, Chainguard, Wolfi). The Meilisearch
+      # upstream image has no native non-root user, so ratatoskr picks the UID.
+      # Using 65532 over 1000 keeps ratatoskr aligned with the broader
+      # container-hardened ecosystem and avoids the "looks like a regular
+      # Linux user" implicit assumption that 1000 carries. Components with a
+      # native user (Redis 999, MariaDB 999, www-data 33) keep theirs.
+      #
+      # The override is safe because /bin/meilisearch is +x for all, fsGroup
+      # 65532 makes the /meili_data PVC mount group-writable, and Meilisearch
+      # writes only under MEILI_DB_PATH (default /meili_data, which holds the
+      # LMDB store, dumps, and snapshots).
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
       containers:
         - name: meilisearch
           image: getmeili/meilisearch:v1.43
