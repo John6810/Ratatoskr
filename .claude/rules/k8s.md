@@ -70,7 +70,16 @@ Document expected resources in values/configmap, never hardcode without a value 
 - **Scheduler is a `CronJob`** with schedule `* * * * *` running `php artisan schedule:run`. Concurrency policy `Forbid` to avoid overlap.
 - **Queue workers are a separate `Deployment`** — distinct image command, distinct HPA. Co-locating workers in the app pod is rejected.
 - **Reverb is its own `Deployment` + `Service` on port 8080.** Sticky sessions (Traefik annotation or session affinity) on the Service.
-- **`/announce` is served by `unit3d-app`**, not a separate daemon. Routing rule on the Ingress, not a different Service.
+- **`/announce` is served by `unit3d-app`**, not a separate daemon. Routing rule on the Ingress, not a different Service. See [`/announce` traffic rules](#announce-traffic-rules) below for hard constraints on the route itself.
+
+## `/announce` traffic rules
+
+Hard constraints on the BitTorrent announce path. Full rationale, alternatives, and trade-offs in [ADR-0003](../../docs/adr/0003-ingress-controller-assumption.md). The `k8s-reviewer` agent flags violations on PRs touching ingress routing.
+
+- **Never configure body-rewriting or substitution middleware on `/announce`.** The response is bencoded; any rewrite corrupts the payload and breaks every connected client. Default ingress configurations are safe; the risk is operator-added middlewares (Traefik substitution, nginx `sub_filter`, etc.).
+- **Never configure redirects on `/announce`** — 301, 302, scheme rewrites, or trailing-slash rewrites that alter the URL. BitTorrent clients (rtorrent, older qBittorrent variants) do not reliably follow redirects, and `.torrent` files are immutable: the announce URL is baked in forever.
+- **Never enable response compression (gzip) on `/announce`** by default. Some BT client decoders are historically brittle; the cost of being wrong (silent breakage for a subset of users) outweighs the bandwidth saving on typically-small announce responses.
+- **Trusted proxy headers must be forwarded.** The ingress controller forwards `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Real-IP`; `unit3d-app` reads them via `TRUSTED_PROXIES` (the controller's pod CIDR). Without this chain, every peer logs as the ingress IP — peer tracking, ratio enforcement, ban hammer, and rate limits all see one synthetic address. Required at every overlay (dev, staging, prod) — a tracker silently logging wrong client IPs is worse than a broken tracker.
 
 ## Helm conventions
 
