@@ -1,6 +1,6 @@
 # ADR-0003: Ingress controller assumption
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-06
 - **Deciders**: <leave blank for now>
 - **Tags**: `ingress`, `kubernetes`, `tls`
@@ -15,7 +15,7 @@ The v0.3 K8s overlay must commit to an ingress story. Three operator profiles co
 
 The traffic shape is unusual for a Laravel app and constrains the ingress decision:
 
-- **`/announce`** — BitTorrent client → ratatoskr. `GET` with query string, **bencoded** response body. BitTorrent clients do not reliably follow HTTP redirects (rtorrent, older qBittorrent variants), and body-rewriting middleware would corrupt the bencoded payload. The path must return `200` with byte-identical upstream output. <!-- VERIFY: the body-rewriting ban is currently documented inside this ADR only — neither `.claude/rules/k8s.md` nor `.claude/CLAUDE.md` state it verbatim today. Hoisting the rule into `.claude/rules/k8s.md` is tracked as a separate follow-up commit (`docs(claude): hoist /announce middleware ban into rules`); do not touch those files from this ADR session. -->
+- **`/announce`** — BitTorrent client → ratatoskr. `GET` with query string, **bencoded** response body. BitTorrent clients do not reliably follow HTTP redirects (rtorrent, older qBittorrent variants), and body-rewriting middleware would corrupt the bencoded payload. The path must return `200` with byte-identical upstream output. The body-rewriting ban was hoisted into `.claude/rules/k8s.md` and `.claude/CLAUDE.md` in commit `6245e15`. This ADR remains the canonical rationale; the rules files are the enforcement surface.
 - **`/torrents/.../download`** — large `.torrent` file delivery via Laravel routes. Standard HTTP, no special routing constraint, but bandwidth-heavy (sized comparably to the `torrent-files` disk).
 - **Everything else** — HTML / Laravel responses, no special handling.
 
