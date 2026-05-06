@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ratatoskr base — environment-agnostic shape of every component.
+# Overlays under kustomize/overlays/ compose components and apply
+# per-environment patches (replicas, resource limits, image tags,
+# storage class names). Architectural decisions in docs/adr/.
+
+namespace: unit3d
+
+# Shared organisational labels applied to every resource. Per-component
+# labels (app.kubernetes.io/name, app.kubernetes.io/component) are set
+# in each component's own manifests.
+#
+# Using `labels:` (modern field) over `commonLabels:` (legacy): the
+# legacy field injects labels into Deployment/Service selectors, which
+# are immutable post-create — a labels-in-selectors change forces
+# resource recreation on every overlay tweak. `labels:` with
+# includeSelectors: false (default) keeps selectors stable.
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/instance: ratatoskr
+      app.kubernetes.io/part-of: ratatoskr
+      app.kubernetes.io/managed-by: Kustomize
+
+resources:
+  - namespace.yaml

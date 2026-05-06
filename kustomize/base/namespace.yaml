@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: unit3d
+  labels:
+    app.kubernetes.io/name: unit3d
+    app.kubernetes.io/instance: ratatoskr
+    app.kubernetes.io/part-of: ratatoskr
+    app.kubernetes.io/managed-by: Kustomize
