@@ -1,6 +1,6 @@
 # ADR-0001: Database deployment topology — embedded StatefulSet vs external managed
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-06
 - **Deciders**: <leave blank for now>
 - **Tags**: `database`, `kubernetes`, `topology`
