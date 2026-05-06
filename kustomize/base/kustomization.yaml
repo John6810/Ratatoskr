@@ -27,3 +27,4 @@ labels:
 
 resources:
   - namespace.yaml
+  - redis

@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Component-specific labels for redis. includeSelectors: false because
+# selectors are immutable post-create — keeping selectors stable across
+# label tweaks. The minimal selector (app.kubernetes.io/name: redis)
+# is set explicitly in each manifest's spec.selector.
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/component: cache
+
+resources:
+  - statefulset.yaml
+  - service.yaml
