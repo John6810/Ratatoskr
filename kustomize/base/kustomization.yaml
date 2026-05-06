@@ -28,3 +28,4 @@ labels:
 resources:
   - namespace.yaml
   - redis
+  - meilisearch

@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: meilisearch
+spec:
+  serviceName: meilisearch
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: meilisearch
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: meilisearch
+    spec:
+      terminationGracePeriodSeconds: 30
+      # The upstream getmeili/meilisearch:v1.43 image runs as root by default
+      # (verified via `docker inspect` at v0.3 scaffolding: Config.User is empty,
+      # /meili_data is root:root). ratatoskr runs it as UID/GID 1000 with
+      # fsGroup 1000 — the /bin/meilisearch binary is +x for all, the PVC mount
+      # at /meili_data becomes group-writable via fsGroup, and Meilisearch
+      # writes only to MEILI_DB_PATH (default /meili_data) plus its dumps and
+      # snapshots subdirs (also under /meili_data).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: meilisearch
+          image: getmeili/meilisearch:v1.43
+          imagePullPolicy: IfNotPresent
+          # Mirrors compose/docker-compose.yml:50-58. MEILI_MASTER_KEY is
+          # mandatory (16+ bytes). MEILI_ENV defaults to production; overlays/dev
+          # can patch this to "development" to relax some upstream guards.
+          # MEILI_NO_ANALYTICS opts out of upstream telemetry.
+          env:
+            - name: MEILI_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: meilisearch-secrets
+                  key: MEILI_MASTER_KEY
+            - name: MEILI_ENV
+              value: production
+            - name: MEILI_NO_ANALYTICS
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 7700
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # K8s httpGet probes hit /health directly via kubelet — no curl in
+          # the container, so readOnlyRootFilesystem stays clean. Compose
+          # equivalent at compose/docker-compose.yml:60 uses `curl` because
+          # Compose healthchecks run inside the container.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /meili_data
+            # Defensive emptyDir for any transient /tmp writes —
+            # readOnlyRootFilesystem: true would otherwise block them.
+            # Meilisearch v1.43 does not appear to write to /tmp in normal
+            # operation, but we provide it as zero-cost insurance.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # storageClassName intentionally omitted — falls back to the
+        # cluster default StorageClass per .claude/rules/k8s.md.
+        resources:
+          requests:
+            # 5Gi baseline — search index can grow with the torrent catalogue.
+            # MeiliSearch is single-node by design (ADR pending for v0.x scale);
+            # snapshots and dumps live under /meili_data so the same PVC must
+            # accommodate them.
+            storage: 5Gi

@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Component-specific labels for meilisearch. includeSelectors: false because
+# selectors are immutable post-create — keeping selectors stable across
+# label tweaks. The minimal selector (app.kubernetes.io/name: meilisearch)
+# is set explicitly in each manifest's spec.selector.
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/name: meilisearch
+      app.kubernetes.io/component: search
+
+resources:
+  - statefulset.yaml
+  - service.yaml
