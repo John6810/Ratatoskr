@@ -1,1 +1,36 @@
+# Claude Code workspace
 .claude/settings.local.json
+.claude/worktrees/
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.development
+
+# TLS / SSH keys
+*.pem
+*.key
+id_rsa
+id_ed25519
+id_*
+
+# Kubernetes
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
