@@ -6,6 +6,9 @@
 
     "allow": [
       "Read",
+      "Read(**/.env.example)",
+      "Read(**/.env.*.example)",
+      "Read(**/.env.test)",
       "Glob",
       "Grep",
       "WebSearch",
