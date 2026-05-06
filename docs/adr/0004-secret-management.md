@@ -1,6 +1,6 @@
 # ADR-0004: Secret management
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-06
 - **Deciders**: <leave blank for now>
 - **Tags**: `secrets`, `security`, `kubernetes`
@@ -142,7 +142,7 @@ Both paths converge on the same invariant: **`APP_KEY` is generated exactly once
 - Laravel 12 encryption (`APP_KEY` semantics): <https://laravel.com/docs/12.x/encryption>
 - UNIT3D `.env.example` at v9.2.0 (secret env vars): <https://github.com/HDInnovations/UNIT3D/blob/v9.2.0/.env.example>
 
-### Follow-up commits (out of scope for this ADR)
+### Resolved follow-up commits
 
-- `docs(adr): create docs/upstream-prs.md` (referenced from ADR-0002) — list ratatoskr-relevant upstream PRs the project tracks (Storage-aware controller refactor for v0.4; potential `key:rotate` upstream).
-- ROADMAP update commit (paired with ADR-0002 storage rewording and ADR-0003 ingress rewording) — optionally add a one-line "secret management: sealed-secrets default, ESO alternative" entry to v0.3 if the ROADMAP currently lacks any secret framing.
+- `docs: create docs/upstream-prs.md skeleton` — landed in commit `ff67743`. Tracks the upstream PR work (Storage-aware controller refactor for v0.4) referenced from ADR-0002. Add a `key:rotate` entry to that file when/if Laravel ships a primitive (re-evaluate at Laravel major bumps).
+- `docs(roadmap): align v0.3/v0.4 wording with ADR-0002 + ADR-0003` — landed in commit `e9be51d`. ROADMAP already covers the secret management framing implicitly via the v0.3 K8s overlay description; no separate ROADMAP entry for secrets needed.
