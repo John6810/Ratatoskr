@@ -147,6 +147,13 @@ RUN chown -R www-data:www-data \
         /data/caddy \
         /config/caddy
 
+# Wrapper entrypoint for cgroup-aware GOMEMLIMIT — see docker/entrypoint.sh.
+# Placed before USER www-data so RUN chmod has permission; ENTRYPOINT is
+# metadata and applies regardless of position in the Dockerfile.
+COPY docker/entrypoint.sh /usr/local/bin/ratatoskr-entrypoint.sh
+RUN chmod +x /usr/local/bin/ratatoskr-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/ratatoskr-entrypoint.sh"]
+
 USER www-data
 
 EXPOSE 80 443 443/udp
