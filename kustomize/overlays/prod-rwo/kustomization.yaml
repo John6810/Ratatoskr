@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ratatoskr prod-rwo overlay — single-replica production for clusters
+# without RWX storage class. unit3d-app, unit3d-queue, and
+# unit3d-scheduler stay at replicas: 1 with strategy: Recreate (the
+# base/ defaults). RWX-mode multi-replica + RollingUpdate + HPA + KEDA
+# lives in the prod-rwx overlay (separate commit).
+#
+# Per ADR-0002 hybrid storage: unit3d-storage PVC is RWO, image disks
+# stay PVC-bound, the three Storage-aware disks (torrent-files,
+# subtitle-files, attachment-files) flip to S3 only if the operator
+# opts in by uncommenting unit3d-storage-secrets-sealed.yaml below
+# and patching FILESYSTEM_<DISK>=s3 in values.env.
+
+namespace: unit3d
+
+resources:
+  - ../../base
+  # Operator: uncomment after dropping sealed-secret manifests in secrets/.
+  # See secrets/README.md for the kubeseal workflow.
+  # - secrets/unit3d-secrets-sealed.yaml
+  # - secrets/mariadb-secrets-sealed.yaml
+  # - secrets/redis-secrets-sealed.yaml
+  # - secrets/meilisearch-secrets-sealed.yaml
+  # - secrets/unit3d-storage-secrets-sealed.yaml   # ONLY if S3 routing opt-in (ADR-0002)
+
+components:
+  - ../../components/ingress-traefik
+  # bootstrap-app-key NOT included in prod (per ADR-0004 default —
+  # operator-supplied APP_KEY via sealed-secrets is the prod-grade flow).
+  # Operator opt-in: uncomment to enable in-cluster APP_KEY generation
+  # for "deploy-and-go" first-time clusters.
+  # - ../../components/bootstrap-app-key
+
+# Operator-supplied non-sensitive values (APP_URL etc.) — committed to
+# the operator's fork as the GitOps source of truth.
+configMapGenerator:
+  - name: unit3d-config
+    behavior: merge
+    envs:
+      - values.env
+
+# Defense-in-depth ConfigMap patch: explicit production values for
+# APP_ENV / APP_DEBUG / LOG_LEVEL / MEILI_ENV. Pinned at the overlay
+# level so a future base/ change cannot accidentally weaken production
+# safety. See patches/unit3d-config-prod.yaml.
+patches:
+  - path: patches/unit3d-config-prod.yaml
+    target:
+      kind: ConfigMap
+      name: unit3d-config

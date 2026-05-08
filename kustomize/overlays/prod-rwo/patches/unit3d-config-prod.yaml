@@ -1,0 +1,24 @@
+# Defense-in-depth ConfigMap patch for prod-rwo. The base/ unit3d-config
+# already carries these values; this patch makes them explicit at the
+# overlay level so a future base/ change cannot accidentally weaken
+# production safety:
+#   - APP_DEBUG=true leaks stack traces with DB credentials and code paths
+#   - LOG_LEVEL=debug explodes log volume in production
+#   - MEILI_ENV=development relaxes Meilisearch master-key length requirement
+#   - APP_ENV=local triggers Laravel dev-only behaviour
+# Pinning all four explicitly turns "matching the base default" into a
+# verifiable intent rather than an accidental one.
+#
+# VITE_ECHO_ADDRESS intentionally NOT set here — UNIT3D v9.2.0 ships no
+# Reverb / WebSocket server, and the base default (http://localhost:8443)
+# is functionally a no-op anyway. If a future UNIT3D release adopts
+# Reverb, this patch will gain a VITE_ECHO_ADDRESS line.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unit3d-config
+data:
+  APP_ENV: production
+  APP_DEBUG: "false"
+  LOG_LEVEL: info
+  MEILI_ENV: production
