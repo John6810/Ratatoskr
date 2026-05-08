@@ -44,3 +44,4 @@ resources:
   - unit3d-migrate
   - unit3d-app
   - unit3d-queue
+  - unit3d-scheduler

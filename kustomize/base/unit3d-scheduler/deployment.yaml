@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unit3d-scheduler
+spec:
+  # NEVER more than 1 replica. Multiple schedulers = duplicate cron firings.
+  # UNIT3D scheduled jobs (AutoSyncTorrentsToMeilisearch, peer/seedtime
+  # accounting, hit-and-run sweeps, etc.) are not idempotent under
+  # concurrent runs — running twice corrupts ratios, double-counts seedtime,
+  # races on row updates. Overlays MUST NOT scale this Deployment;
+  # operators wanting HA scheduling adopt a leader-election sidecar in a
+  # future ADR (out of scope at v0.3).
+  replicas: 1
+  # Same Recreate strategy reasoning as unit3d-app and unit3d-queue: RWO
+  # unit3d-storage PVC. RollingUpdate would deadlock on the PVC handoff.
+  # The replicas: 1 hard cap actually makes this less of a concern (no
+  # multi-replica scenario to handle), but keeping Recreate explicit so
+  # the strategy is visible.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: unit3d-scheduler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: unit3d-scheduler
+    spec:
+      # Scheduler dispatches but does not process jobs itself; in-flight
+      # scheduling is sub-second. 60s is generous for the artisan
+      # command to receive SIGTERM and exit cleanly.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: unit3d-scheduler
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          imagePullPolicy: IfNotPresent
+          # Mirrors compose/docker-compose.yml unit3d-scheduler (lines
+          # 133-158): php artisan schedule:work. Laravel 10+ self-
+          # scheduling primitive — sleeps until the next minute and
+          # dispatches due tasks via the scheduler defined in
+          # routes/console.php (or App\Console\Kernel::schedule()).
+          # NOT a CronJob: schedule:work is the canonical Laravel idiom
+          # for in-cluster scheduling, drift-free and lock-aware where
+          # individual ->withoutOverlapping() declarations exist.
+          command:
+            - php
+            - /app/artisan
+            - schedule:work
+          envFrom:
+            - configMapRef:
+                name: unit3d-config
+            - secretRef:
+                name: unit3d-secrets
+            - secretRef:
+                name: mariadb-secrets
+            - secretRef:
+                name: redis-secrets
+            - secretRef:
+                name: meilisearch-secrets
+            - secretRef:
+                name: unit3d-storage-secrets
+                optional: true
+          # Lighter than the queue worker — scheduler dispatches, doesn't
+          # process. Per .claude/rules/k8s.md baseline.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Same liveness pattern as unit3d-queue: artisan --version
+          # exercises PHP autoload + app boot. No HTTP exposure, no
+          # readiness probe (no Service in front).
+          livenessProbe:
+            exec:
+              command:
+                - php
+                - /app/artisan
+                - --version
+            initialDelaySeconds: 15
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: filesystems-config
+              mountPath: /app/config/filesystems.php
+              subPath: filesystems.php
+              readOnly: true
+            - name: storage
+              mountPath: /app/storage
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: caddy-data
+              mountPath: /data/caddy
+            - name: caddy-config
+              mountPath: /config/caddy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: filesystems-config
+          configMap:
+            name: unit3d-filesystems-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: unit3d-storage
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
