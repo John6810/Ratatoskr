@@ -4,6 +4,56 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.4.0] — 2026-05-08
+
+Documentation expansion & migration tool. Five operator-facing docs
+(architecture, upgrade-guide, security-hardening, monitoring,
+multi-queue-scaling), two POSIX sh migration scripts (in-place RWO→RWX
+PVC swap, guided 8-step Compose → K8s stepper with state persistence
+and three secrets-mode paths). The S3 storage scope originally planned
+for v0.4.0 is upstream-PR-gated and deferred to v0.4.1.
+
+### Added
+
+- `docs/architecture.md` — component graph, storage strategy, request
+  flow (3 Mermaid diagrams).
+- `docs/upgrade-guide.md` — 3-path upgrade procedures (Compose → K8s,
+  prod-rwo → prod-rwx, UNIT3D version bumps).
+- `docs/security-hardening.md` — production hardening recipes
+  (NetworkPolicy egress tightening, sealed-secrets vs ESO trade-offs,
+  TLS posture, container hardening, database hardening).
+- `docs/monitoring.md` — observability baseline (Prometheus, Grafana,
+  Loki, Alloy) with five baseline PrometheusRule alerts and
+  ServiceMonitor examples per stateful component.
+- `docs/multi-queue-scaling.md` — KEDA multi-lane pattern with Mermaid
+  decision tree, hybrid Component+inline pattern, 5 anti-patterns.
+- `scripts/migration/migrate-rwo-to-rwx.sh` — idempotent in-place PVC
+  accessModes swap (POSIX sh, 805 lines, shellcheck clean).
+- `scripts/migration/migrate-compose-to-k8s.sh` — guided 8-step
+  Compose → K8s migration with state persistence and resume
+  capability (POSIX sh, 1129 lines, shellcheck clean). Three
+  secrets-mode paths per ADR-0004 (sealed-secrets / ESO / vanilla).
+- `scripts/migration/README.md` — operator guide for both migration
+  scripts (env vars, exit codes, recovery procedures).
+
+### Changed
+
+- ROADMAP: v0.5 reframed as "Helm chart + Gateway API parity" —
+  ingress-vanilla Component and Helm chart prep relocated from v0.4
+  (per ADR-0006 successor decision deferred to v0.5).
+
+### Deferred (upstream-PR-gated)
+
+- S3 storage migration for image disks (avatars, banners, covers,
+  article/category/playlist images) — depends on upstream UNIT3D
+  Storage-aware refactor PRs documented in
+  [docs/upstream-prs.md](docs/upstream-prs.md).
+- `unit3d-app` full statelessness — depends on the same upstream PRs.
+- Documented S3 backends (MinIO, R2, B2, AWS) and bucket policies /
+  lifecycle rules / sample CORS — moves to v0.4.1 once upstream lands.
+
+[v0.4.0]: https://github.com/John6810/Ratatoskr/compare/v0.3.0...v0.4.0
+
 ## [v0.3.0] — 2026-05-08
 
 Kubernetes deployment cycle. Three production-grade Kustomize overlays

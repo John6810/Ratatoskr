@@ -62,17 +62,27 @@ The first real Kubernetes deployment path. Architectural decisions captured in [
 
 **Scale envelope**: 5,000–10,000 active users on a 3-node cluster (`prod-rwx` mode). `prod-rwo` mode caps at single-replica throughput, suitable for ~1K-3K active users.
 
-### v0.4.0 — S3 Storage Migration & Full Statelessness 📋
+### v0.4.0 — Documentation expansion & migration tool — Released 2026-05-08 ✅
 
-Completes the storage abstraction from v0.3 and ships migration tooling. **Hard-depends on upstream UNIT3D PRs** tracked in [docs/upstream-prs.md](./upstream-prs.md) — specifically the Storage-aware refactor of image-handling controllers (avatars, icons, covers, banners, article/category/playlist images, `temporary-nfos`). Without those PRs, image disks remain PVC-bound and `unit3d-app` cannot be fully stateless.
+Operator-facing documentation cycle and migration tooling. Five operator-facing docs that take a v0.3 deployment to a confidently-operated production posture (architecture, upgrade-guide, security-hardening, monitoring, multi-queue-scaling), plus two POSIX sh migration scripts that automate the upgrade-guide procedures (in-place RWO→RWX PVC swap, guided 8-step Compose → K8s stepper with state persistence). The S3 storage scope originally planned for v0.4.0 is upstream-PR-gated and tracked in v0.4.1 below.
+
+- ✅ `docs/architecture.md` (`11bd666`) — component graph, storage strategy, request flow (3 Mermaid diagrams).
+- ✅ `docs/upgrade-guide.md` (`52ac5ca`) — three migration paths (Compose → K8s, prod-rwo → prod-rwx, UNIT3D version bumps).
+- ✅ `docs/security-hardening.md` (`f7af3a4`) — production hardening recipes (NetworkPolicy egress, sealed-secrets vs ESO, TLS posture, container hardening, database hardening).
+- ✅ `docs/monitoring.md` (`4e09e5c`) — observability baseline (Prometheus + Grafana + Loki + Alloy) with five baseline PrometheusRule alerts and per-component ServiceMonitor examples.
+- ✅ `docs/multi-queue-scaling.md` (`8ad8a42`) — KEDA multi-lane pattern, hybrid Component+inline shape, decision tree (Mermaid), 5 anti-patterns.
+- ✅ **Unified migration tool** (`03b8aaf`, `496f506`): `scripts/migration/migrate-rwo-to-rwx.sh` covers in-place RWO→RWX PVC swap (Option B); `scripts/migration/migrate-compose-to-k8s.sh` covers Compose → K8s as a guided 8-step stepper with state persistence and three secrets-mode paths (sealed-secrets / ESO / vanilla). v0.1/v0.2 operators become first-class upgrade citizens.
+
+**Scale envelope**: same as v0.3 — operators now have the documentation and tooling to actually upgrade into it.
+
+### v0.4.1 — S3 storage migration [upstream-PR-gated, ETA TBD] 📋
+
+This point release lands the storage scope originally planned for v0.4.0. **Hard-depends on upstream UNIT3D PRs** tracked in [docs/upstream-prs.md](./upstream-prs.md) — specifically the Storage-aware refactor of image-handling controllers (avatars, icons, covers, banners, article/category/playlist images, `temporary-nfos`). Tag will be cut once the upstream PRs land and ratatoskr's S3 routing flips for the image disks.
 
 - Storage-aware writes land upstream → image disks flip from `local` to `s3` in the `config/filesystems.php` override (same ConfigMap pattern as v0.3, no manifest rewrite)
 - Documented backends: MinIO (self-hosted), Cloudflare R2 (zero egress), Backblaze B2 (cheap), AWS S3 (default mental model)
-- ✅ **Unified migration tool** (`03b8aaf`, `496f506`): `scripts/migration/migrate-rwo-to-rwx.sh` covers in-place RWO→RWX PVC swap (Option B); `scripts/migration/migrate-compose-to-k8s.sh` covers Compose → K8s as a guided 8-step stepper with state persistence and three secrets-mode paths (sealed-secrets / ESO / vanilla). v0.1/v0.2 operators become first-class upgrade citizens. PVC → S3 split for image disks lands once upstream Storage-aware refactor merges.
 - Bucket policies, lifecycle rules, sample CORS config; storage-side backup story (S3 versioning + cross-region replication; PVC snapshots if any image disks remain)
 - `unit3d-app` becomes truly stateless once upstream lands → `replicas: N` works on any cluster, RWX no longer required for HA
-- ✅ **Documentation expansion**: `docs/architecture.md` (`11bd666`), `docs/upgrade-guide.md` (`52ac5ca`), `docs/security-hardening.md` (`f7af3a4`), `docs/monitoring.md` (`4e09e5c`).
-- `docs/multi-queue-scaling.md` — KEDA multi-ScaledObject pattern (one ScaledObject per Laravel named-queue priority lane, overlay-side patches against the v0.3 `keda-queue-scaler` Component, no Component fork required). Closes v0.4.
 
 **Scale envelope**: app tier scales freely. DB and `/announce` become the next bottlenecks. Conditional on upstream PRs; otherwise inherits the v0.3 RWX scale envelope.
 
