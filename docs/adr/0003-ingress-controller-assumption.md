@@ -30,19 +30,21 @@ ROADMAP v0.3 names "Ingress via Traefik IngressRoute + cert-manager (Let's Encry
 
 ## Decision
 
-Ship v0.3 with **two first-class ingress paths**, plus a TLS-source toggle that overrides both:
+Ship v0.3 with **two first-class ingress paths**, a **TLS-source toggle**, and a **Component-based composition** that keeps storage-mode overlays (prod-rwo / prod-rwx) ingress-controller-agnostic. The two ingress paths are Kustomize Components, not overlays — operators compose `[storage-overlay] + [ingress-component]` rather than picking one of four overlays from a storage × ingress matrix. See the Decision Log for the original two-overlay wording and the rationale for the move to Components.
 
-1. **`overlays/prod` (default): Traefik `IngressRoute` + cert-manager.**
+1. **`components/ingress-traefik` (shipped v0.3, default): Traefik `IngressRoute` + cert-manager.**
    - Matches ROADMAP v0.3 wording and K3s default.
-   - `IngressRoute` CRD for routing rules + Traefik middleware (rate limit, headers).
-   - cert-manager `ClusterIssuer` for Let's Encrypt; HTTP-01 challenge default, DNS-01 documented for wildcard or rate-limit-sensitive cases.
-   - `/announce` route flagged with an in-manifest comment forbidding middleware on that route. The route is intentionally listed before any wildcard catch-all so middleware on `*` does not bleed in.
+   - `IngressRoute` CRD for routing rules + Traefik middleware (rate limit, security headers).
+   - cert-manager `ClusterIssuer` + `Certificate` for Let's Encrypt; HTTP-01 challenge default, DNS-01 documented for wildcard or rate-limit-sensitive cases.
+   - Two-Route split implements the `/announce` hard rule: Route 1 matches `Host && PathPrefix(/announce)` with no middleware (priority 100), Route 2 matches the catch-all Host with rate-limit + security-headers (priority 10). The empty middlewares list on the announce Route makes the invariant visually obvious.
 
-2. **`overlays/prod-vanilla-ingress`: standard `networking.k8s.io/v1 Ingress` + cert-manager.**
+2. **`components/ingress-vanilla` (planned, deferred — see Decision Log): standard `networking.k8s.io/v1 Ingress` + cert-manager.**
    - Operator brings their own controller (nginx-ingress, HAProxy ingress, AWS ALB, GCE ingress, Contour). No Traefik CRD dependency.
    - Same routing shape; differences are annotations and middleware translation.
-   - Example annotations shipped for nginx-ingress and AWS ALB. Other controllers translate from those.
-   - `/announce` "no middleware" comment translated per controller (`nginx.ingress.kubernetes.io/configuration-snippet` etc.); operators on niche controllers verify themselves.
+   - Example annotations for nginx-ingress and AWS ALB. Other controllers translate from those.
+   - `/announce` two-Route equivalent expressed via per-controller annotations (`nginx.ingress.kubernetes.io/configuration-snippet`, ALB target-group rules, etc.). Operators on niche controllers verify themselves.
+
+Operators select exactly one ingress Component from their overlay's `components:` list. Operators on nginx / ALB / GCE swap `components/ingress-traefik` for `components/ingress-vanilla` in their fork — the storage overlay (prod-rwo or prod-rwx) does not change. This avoids the 4-overlay combinatorial that the original two-first-class-overlays wording would have produced once ADR-0002 split storage into RWO and RWX modes.
 
 3. **TLS source toggle (`INGRESS_TLS` overlay value):**
    - `letsencrypt` (default): cert-manager + Let's Encrypt as described above.
@@ -107,3 +109,20 @@ Ship v0.3 with **two first-class ingress paths**, plus a TLS-source toggle that 
 
 - `docs(claude): hoist /announce middleware ban into rules` — promotes the body-rewriting ban from this ADR into `.claude/rules/k8s.md` as a hard rule. Until that commit lands, this ADR is the canonical reference for the constraint, and the `k8s-reviewer` agent reads it from here.
 - ROADMAP v0.3 ingress wording rewrite (paired with the v0.4 storage rewording from ADR-0002).
+
+## Decision Log
+
+### 2026-05-08 — Component-based ingress decomposition
+
+Original Decision (acceptance commit `e763b12`, 2026-05-06) committed two first-class overlays — `overlays/prod` (Traefik `IngressRoute` + cert-manager) and `overlays/prod-vanilla-ingress` (standard `Ingress`). The v0.3 storage overlay split (`prod-rwo` / `prod-rwx` per ADR-0002) made this combinatorial: four overlays if both axes were explicit (`prod-rwo-traefik`, `prod-rwo-vanilla`, `prod-rwx-traefik`, `prod-rwx-vanilla`).
+
+Resolved via Kustomize Components: ingress controller is a composable Component (`components/ingress-traefik` shipped v0.3, `components/ingress-vanilla` deferred — see Future amendments). Storage overlays (`prod-rwo`, `prod-rwx`) remain the primary axis; ingress is overlaid onto them via the `components:` list in each overlay's `kustomization.yaml`. Both first-class ingress paths from the original Decision are preserved — only the implementation mechanism changed.
+
+Refs:
+- `8ac9fd0` feat(kustomize): add ingress-traefik Component
+- `6f8c25f` feat(kustomize): add overlays/prod-rwo
+
+### Future amendments
+
+- **`components/ingress-vanilla`** — deferred to v0.4 or later, operator-demand-gated. Current v0.3 ratatoskr ships only `ingress-traefik` (matches K3s default, the more common self-hosted starting point). Operators on nginx-ingress / AWS ALB / GCE today translate the Traefik routing into their controller's annotation dialect and contribute upstream when they have a clean version.
+- **Reverb integration** — when UNIT3D adopts Reverb (or any browser-facing WebSocket), this ADR or a successor will document sticky session handling, the separate `/reverb` route, WebSocket upgrade headers, and per-controller affinity tweaks. v0.3 carries no Reverb code path; the "No sticky sessions at v0.3" Decision paragraph holds until upstream ships WS.
