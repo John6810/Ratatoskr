@@ -5,26 +5,17 @@ kind: Kustomization
 # selectors are immutable post-create; the minimal selector
 # (app.kubernetes.io/name: unit3d-app) is set explicitly in deployment.yaml
 # spec.selector and service.yaml spec.selector.
+#
+# The unit3d-filesystems-config ConfigMap (with suffix hash) is generated
+# at the parent base/kustomization.yaml level so unit3d-app, unit3d-queue,
+# and unit3d-scheduler all reference the same name and roll together when
+# the PHP override changes.
 labels:
   - includeSelectors: false
     includeTemplates: true
     pairs:
       app.kubernetes.io/name: unit3d-app
       app.kubernetes.io/component: app
-
-# Generate unit3d-filesystems-config ConfigMap from the tracked PHP override
-# at config/filesystems.php. The default suffix hash is enabled — every
-# change to the .php file produces a new ConfigMap name (e.g.
-# unit3d-filesystems-config-abc123def4), which Kustomize automatically
-# rewrites into the Deployment's volumes.configMap.name. Result: a PHP
-# override edit triggers a new ReplicaSet rollout (Recreate strategy at
-# base/, RollingUpdate in prod-rwx).
-configMapGenerator:
-  - name: unit3d-filesystems-config
-    files:
-      - config/filesystems.php
-    options:
-      disableNameSuffixHash: false
 
 resources:
   - deployment.yaml

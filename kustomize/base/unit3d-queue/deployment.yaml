@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unit3d-queue
+spec:
+  replicas: 1
+  # Recreate strategy at base/ for the same RWO PVC reason as unit3d-app:
+  # multiple replicas cannot share an RWO unit3d-storage volume, and
+  # RollingUpdate would deadlock on the PVC handoff. Prod-rwx overlays
+  # patch to RollingUpdate + multi-replica + HPA + KEDA queue-length.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: unit3d-queue
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: unit3d-queue
+    spec:
+      # Long grace window for in-flight queue jobs to finish before SIGKILL.
+      # Paired with --max-time=3600 below so worker processes self-cycle
+      # within the same window — combined effect: a Deployment rollout
+      # naturally waits for the current job batch to complete.
+      terminationGracePeriodSeconds: 3600
+      # www-data UID/GID 33 per Dockerfile USER directive (same as
+      # unit3d-app and unit3d-migrate). fsGroup 33 makes the shared
+      # unit3d-storage PVC mount group-writable.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: unit3d-queue
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          imagePullPolicy: IfNotPresent
+          # Mirrors compose/docker-compose.yml unit3d-queue (lines 160-180):
+          # php artisan queue:work --tries=3 --max-time=3600 --sleep=3.
+          # --tries=3 retries each failed job 3 times before pushing to
+          # the failed_jobs table. --max-time=3600 caps worker lifetime
+          # to 1h (memory hygiene; PHP long-running processes leak).
+          # --sleep=3 idles 3s between empty-queue polls.
+          command:
+            - php
+            - /app/artisan
+            - queue:work
+            - --tries=3
+            - --max-time=3600
+            - --sleep=3
+          envFrom:
+            - configMapRef:
+                name: unit3d-config
+            - secretRef:
+                name: unit3d-secrets
+            - secretRef:
+                name: mariadb-secrets
+            - secretRef:
+                name: redis-secrets
+            - secretRef:
+                name: meilisearch-secrets
+            - secretRef:
+                name: unit3d-storage-secrets
+                optional: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Workers don't expose HTTP — health-probe via artisan --version,
+          # which exercises PHP autoload + app boot. Mirrors Compose's
+          # healthcheck pattern at compose/docker-compose.yml:181-186.
+          # No readinessProbe: there's no Service in front of queue
+          # workers, traffic gating is moot. The pod is "ready" iff it
+          # passes liveness; if liveness fails 3 consecutive times,
+          # kubelet restarts the container.
+          livenessProbe:
+            exec:
+              command:
+                - php
+                - /app/artisan
+                - --version
+            initialDelaySeconds: 15
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            # Same filesystems.php override as unit3d-app — workers see
+            # the same disk routing as the web tier (uploads land on the
+            # right backend regardless of which pod handled the request).
+            # ConfigMap generated at base/kustomization.yaml level (lifted
+            # there from unit3d-app/ in this commit) so all three
+            # workloads share one suffix hash.
+            - name: filesystems-config
+              mountPath: /app/config/filesystems.php
+              subPath: filesystems.php
+              readOnly: true
+            - name: storage
+              mountPath: /app/storage
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            # /data/caddy and /config/caddy are emptyDirs even though the
+            # queue worker does not run Caddy — the upstream image bakes
+            # these paths and chowns them to www-data, and
+            # readOnlyRootFilesystem: true would block any defensive
+            # write the runtime might attempt at boot.
+            - name: caddy-data
+              mountPath: /data/caddy
+            - name: caddy-config
+              mountPath: /config/caddy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: filesystems-config
+          configMap:
+            name: unit3d-filesystems-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: unit3d-storage
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

@@ -25,6 +25,17 @@ labels:
       app.kubernetes.io/part-of: ratatoskr
       app.kubernetes.io/managed-by: Kustomize
 
+# Shared filesystems.php override (ADR-0002 hybrid storage model).
+# Generated at base level so unit3d-app, unit3d-queue, and unit3d-scheduler
+# all reference the same suffix-hashed ConfigMap name and roll together
+# when the PHP override changes — single source of truth, single rollout.
+configMapGenerator:
+  - name: unit3d-filesystems-config
+    files:
+      - config/filesystems.php
+    options:
+      disableNameSuffixHash: false
+
 resources:
   - namespace.yaml
   - mariadb
@@ -32,3 +43,4 @@ resources:
   - meilisearch
   - unit3d-migrate
   - unit3d-app
+  - unit3d-queue
