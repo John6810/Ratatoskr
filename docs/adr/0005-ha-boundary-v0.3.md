@@ -1,6 +1,6 @@
 # ADR-0005: HA boundary at v0.3
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-08
 - **Deciders**: <leave blank for now>
 - **Tags**: `ha`, `kubernetes`, `roadmap`
