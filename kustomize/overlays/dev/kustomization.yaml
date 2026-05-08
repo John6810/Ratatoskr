@@ -1,0 +1,114 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ratatoskr dev overlay — K3s mono-node / Docker Desktop / Kind. The
+# "deploy-and-go" persona: kubectl apply -k overlays/dev brings up a
+# working tracker on a fresh local cluster with no external dependencies
+# (no S3 endpoint, no sealed-secrets controller, no DNS). Per ADR-0004,
+# production overlays use sealed-secrets / ESO; dev sidesteps that with
+# deterministic in-overlay secretGenerator values.
+
+namespace: unit3d
+
+resources:
+  - ../../base
+
+# Opt-in bootstrap-app-key Component: the Job no-ops in dev (the
+# secretGenerator below pre-populates APP_KEY with a deterministic fake
+# value), but including it here exercises the Component path so the
+# pattern is validated by every CI run of the dev overlay.
+components:
+  - ../../components/bootstrap-app-key
+
+# Override the base unit3d-config ConfigMap with dev-specific values.
+# Strategic merge on ConfigMap.data adds and updates keys; existing
+# keys from base/ (DB_HOST, REDIS_HOST, MEILISEARCH_HOST, etc.) stay
+# unchanged. APP_URL and VITE_ECHO_ADDRESS keep the base localhost
+# defaults (kubectl port-forward usage; see README).
+patches:
+  - target:
+      kind: ConfigMap
+      name: unit3d-config
+    patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: unit3d-config
+      data:
+        APP_ENV: local
+        APP_DEBUG: "true"
+        LOG_LEVEL: debug
+        MEILI_ENV: development
+
+  # Resource and storage patches for K3s mono-node sizing.
+  - path: patches/resources-mariadb.yaml
+    target:
+      kind: StatefulSet
+      name: mariadb
+  - path: patches/resources-redis.yaml
+    target:
+      kind: StatefulSet
+      name: redis
+  - path: patches/resources-meilisearch.yaml
+    target:
+      kind: StatefulSet
+      name: meilisearch
+  - path: patches/resources-unit3d-app.yaml
+    target:
+      kind: Deployment
+      name: unit3d-app
+  - path: patches/resources-unit3d-queue.yaml
+    target:
+      kind: Deployment
+      name: unit3d-queue
+  - path: patches/resources-unit3d-scheduler.yaml
+    target:
+      kind: Deployment
+      name: unit3d-scheduler
+  - path: patches/pvc-unit3d-storage.yaml
+    target:
+      kind: PersistentVolumeClaim
+      name: unit3d-storage
+
+# Generate dev-only Secrets with deterministic fake values. Names match
+# the canonical secret names from base/secrets-templates/ — the workload
+# manifests reference these via secretRef. disableNameSuffixHash: true
+# keeps the canonical names intact so the bootstrap-app-key Component's
+# Job can `kubectl get secret unit3d-secrets` without resolving a hash.
+#
+# DEV ONLY. Never reuse these values outside dev. Anyone with read
+# access to this file knows every credential.
+secretGenerator:
+  - name: unit3d-secrets
+    options:
+      disableNameSuffixHash: true
+    literals:
+      # 32 zero bytes base64-encoded — valid Laravel APP_KEY format,
+      # zero entropy. Acceptable in dev only.
+      - APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      - DEFAULT_OWNER_NAME=admin
+      - DEFAULT_OWNER_EMAIL=admin@dev.local
+      - DEFAULT_OWNER_PASSWORD=dev-not-a-real-password
+  - name: mariadb-secrets
+    options:
+      disableNameSuffixHash: true
+    literals:
+      - MARIADB_ROOT_PASSWORD=dev-mariadb-root
+      - DB_PASSWORD=dev-mariadb-unit3d
+      - MARIADB_BACKUP_PASSWORD=dev-mariadb-backup
+  - name: redis-secrets
+    options:
+      disableNameSuffixHash: true
+    literals:
+      - REDIS_PASSWORD=dev-redis-password
+  - name: meilisearch-secrets
+    options:
+      disableNameSuffixHash: true
+    literals:
+      # Meilisearch production mode requires a 16+ byte master key. Dev
+      # padding string is exactly 48 bytes — well above the floor.
+      - MEILI_MASTER_KEY=dev-meili-master-key-padding-to-16-bytes-min
+  # No unit3d-storage-secrets in dev: every disk in config/filesystems.php
+  # falls back to its 'local' default since FILESYSTEM_<NAME> env vars
+  # are unset, and the Deployment's secretRef on unit3d-storage-secrets
+  # is marked optional: true so the absence does not block pod start.

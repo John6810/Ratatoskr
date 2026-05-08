@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: unit3d-bootstrap-app-key
+  labels:
+    app.kubernetes.io/name: bootstrap-app-key
+    app.kubernetes.io/component: bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: unit3d-bootstrap-app-key
+subjects:
+  - kind: ServiceAccount
+    name: unit3d-bootstrap-sa

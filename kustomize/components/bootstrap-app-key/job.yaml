@@ -1,0 +1,124 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unit3d-bootstrap-app-key
+  labels:
+    app.kubernetes.io/name: bootstrap-app-key
+    app.kubernetes.io/component: bootstrap
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bootstrap-app-key
+        app.kubernetes.io/component: bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: unit3d-bootstrap-sa
+      # Pod-level: enforce non-root. Per-container UID overrides below
+      # because the two images use different non-root UIDs (unit3d image
+      # runs as www-data UID 33, bitnami/kubectl runs as 1001 by
+      # convention).
+      securityContext:
+        runAsNonRoot: true
+      # Two-container pattern: the unit3d image has php artisan but no
+      # kubectl; the bitnami/kubectl image has kubectl but no php. The
+      # init container generates the key with `php artisan key:generate
+      # --show` and writes it to a shared emptyDir; the main container
+      # reads from there and conditionally patches the Secret.
+      initContainers:
+        - name: generate-key
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              php /app/artisan key:generate --show > /shared/app-key
+          securityContext:
+            runAsUser: 33
+            runAsGroup: 33
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 512Mi
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+            # Laravel writes compiled config to /app/bootstrap/cache
+            # during artisan boot; emptyDir under readOnlyRootFilesystem.
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: patch-secret
+          # Pinned to a recent stable Bitnami kubectl tag matching the
+          # cluster baseline (Kubernetes 1.32 per .claude/rules/k8s.md).
+          image: bitnami/kubectl:1.32
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+
+              # Read existing APP_KEY (may be missing or CHANGEME).
+              EXISTING=$(kubectl get secret unit3d-secrets \
+                -o jsonpath='{.data.APP_KEY}' 2>/dev/null \
+                | base64 -d 2>/dev/null || echo "")
+
+              if [ -n "$EXISTING" ] && [ "$EXISTING" != "CHANGEME" ]; then
+                echo "APP_KEY already present in unit3d-secrets — no-op."
+                exit 0
+              fi
+
+              NEW_KEY=$(cat /shared/app-key)
+              if [ -z "$NEW_KEY" ]; then
+                echo "ERROR: generated APP_KEY is empty." >&2
+                exit 1
+              fi
+
+              # Patch the Secret with the new key. data.APP_KEY must be
+              # base64-encoded; printf avoids trailing newline before
+              # base64 encoding.
+              ENCODED=$(printf '%s' "$NEW_KEY" | base64 -w0)
+              kubectl patch secret unit3d-secrets \
+                --type=merge \
+                -p="{\"data\":{\"APP_KEY\":\"$ENCODED\"}}"
+
+              echo "APP_KEY generated and patched into unit3d-secrets."
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: shared
+          emptyDir: {}
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

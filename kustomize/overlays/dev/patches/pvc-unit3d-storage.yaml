@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: unit3d-storage
+spec:
+  resources:
+    requests:
+      storage: 1Gi
