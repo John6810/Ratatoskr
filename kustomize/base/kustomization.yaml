@@ -30,3 +30,4 @@ resources:
   - mariadb
   - redis
   - meilisearch
+  - unit3d-migrate

@@ -1,0 +1,96 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unit3d-migrate
+spec:
+  # Job semantics: bounded retry on transient failure, hard timeout, GC after
+  # success. Migrations on a fresh DB are seconds; activeDeadlineSeconds 600
+  # is generous enough for very large schemas without leaking forever.
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: unit3d-migrate
+    spec:
+      restartPolicy: OnFailure
+      # www-data is UID 33 in the dunglas/frankenphp Debian-based runtime;
+      # the Dockerfile chowns /app/storage and /app/bootstrap/cache to
+      # www-data and switches USER www-data before exposing ports.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: migrate
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          imagePullPolicy: IfNotPresent
+          # Mirrors compose/docker-compose.yml:91-95: chained migrate +
+          # seed + scout:sync-index-settings. The scout sync push is the
+          # v0.1.0 hotfix landed in commit 7840a17 — UNIT3D v9.2.0 declares
+          # filterableAttributes for the torrents and people indexes in
+          # config/scout.php, but no command pushes that config to Meili
+          # automatically. Without this, /torrents 500s on the status
+          # filter. The command is idempotent, safe on every redeploy.
+          #
+          # scout:import is intentionally NOT chained: on a populated
+          # tracker it re-indexes every row in 500-batch chunks (hours),
+          # blocking the Job and any downstream wait-for-completion.
+          # Operator runs scout:import manually for backfill (compose
+          # README.md documents the recipe; a K8s equivalent is a one-shot
+          # manual Job, not part of the standard deploy lifecycle).
+          command: ["sh", "-c"]
+          args:
+            - >-
+              php /app/artisan migrate --force --seed &&
+              php /app/artisan scout:sync-index-settings
+          # envFrom pulls all keys from the named ConfigMap and Secrets
+          # into the container env. Per the user's directive at v0.3
+          # scaffolding: simpler than per-key valueFrom blocks at base/;
+          # the Job runs once and exits, so env-surface blast radius is
+          # short-lived. Future hardening can move to per-key bindings.
+          envFrom:
+            - configMapRef:
+                name: unit3d-config
+            - secretRef:
+                name: unit3d-secrets
+            - secretRef:
+                name: mariadb-secrets
+            - secretRef:
+                name: redis-secrets
+            - secretRef:
+                name: meilisearch-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage
+            # Laravel's compiled config and view caches live under
+            # /app/bootstrap/cache. readOnlyRootFilesystem: true requires
+            # this be a writable mount; emptyDir is fine since the cache
+            # is regenerated on every Job invocation.
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: unit3d-storage
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

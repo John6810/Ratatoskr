@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: unit3d-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # storageClassName intentionally omitted — falls back to the cluster
+  # default StorageClass per .claude/rules/k8s.md.
+  resources:
+    requests:
+      # 5Gi base default. The PVC holds Laravel's writable storage tree
+      # at /app/storage — image disks (avatars, covers, banners,
+      # article/category/playlist images, NFOs) per the ADR-0002 hybrid
+      # model. Storage-aware disks (torrent-files, subtitle-files,
+      # attachment-files) are S3-routed in the prod overlay and do not
+      # consume this PVC.
+      #
+      # Lives under unit3d-migrate/ only because that component is the
+      # first to need it; unit3d-app, unit3d-queue, and unit3d-scheduler
+      # mount the same claim by name.
+      storage: 5Gi
