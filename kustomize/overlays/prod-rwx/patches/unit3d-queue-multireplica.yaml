@@ -1,0 +1,28 @@
+# Multi-replica + RollingUpdate for unit3d-queue, base resources
+# preserved.
+#
+# replicas: 2 = HPA floor when the keda-queue-scaler Component is
+# disabled (default at v0.3 RWX); HPA scales 2-8 on CPU
+# (averageUtilization 70) per hpa/unit3d-queue-hpa.yaml. When the
+# operator opts into the keda-queue-scaler Component, KEDA's
+# ScaledObject takes over — operators MUST NOT keep both the CPU HPA
+# and the KEDA ScaledObject targeting unit3d-queue (they fight; see
+# components/keda-queue-scaler/README.md).
+#
+# strategy: RollingUpdate uses K8s defaults (maxSurge: 25%,
+# maxUnavailable: 25%). With replicas: 2, that's 1 surging + 1 down at
+# peak — acceptable for queue workers because queue:work --max-time=
+# 3600 cycles workers naturally and graceful shutdown handles the
+# in-flight job (the current job finishes, no new jobs picked up).
+#
+# Resources stay at base (100m/256Mi req, 500m/1Gi lim). Queue
+# workers are bursty per-job, not constantly CPU-bound; bumping at
+# the overlay level is operator-call when the scale envelope demands.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unit3d-queue
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate

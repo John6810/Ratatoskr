@@ -1,0 +1,91 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ratatoskr prod-rwx overlay — multi-replica production for clusters
+# with an RWX storage class. unit3d-app, unit3d-queue scale 2-N via
+# HPA + PDB + RollingUpdate (zero-downtime app, conservative-default
+# queue). MariaDB sized for the 5K-10K user envelope. S3 routing
+# active by default for the 3 Storage-aware disks per ADR-0002.
+# ingress-traefik Component composed; keda-queue-scaler and
+# bootstrap-app-key opt-in (commented).
+
+namespace: unit3d
+
+# ---- Resources ----
+# Base + sealed-secrets (commented; operator drops sealed manifests
+# in secrets/ then uncomments the corresponding line) + HPA + PDB.
+resources:
+  - ../../base
+
+  # Sealed-secrets — operator-supplied per ADR-0004. Drop the
+  # *-sealed.yaml files in secrets/ and uncomment the line(s) below.
+  # The unit3d-storage-secrets line is MANDATORY at prod-rwx (S3
+  # routing on by default in values.env requires AWS_*-shaped
+  # credentials per disk); the others are mandatory if the
+  # corresponding base/secrets-templates/ file ships a non-empty
+  # template. See secrets/README.md.
+  # - secrets/unit3d-secrets-sealed.yaml
+  # - secrets/mariadb-secrets-sealed.yaml
+  # - secrets/redis-secrets-sealed.yaml
+  # - secrets/meilisearch-secrets-sealed.yaml
+  # - secrets/unit3d-storage-secrets-sealed.yaml   # MANDATORY (S3 creds)
+
+  - hpa/unit3d-app-hpa.yaml
+  - hpa/unit3d-queue-hpa.yaml
+  - pdb/unit3d-app-pdb.yaml
+  - pdb/unit3d-queue-pdb.yaml
+
+# ---- Components ----
+# ingress-traefik default (matches K3s default; operators on
+# nginx/ALB swap in their fork). keda-queue-scaler and
+# bootstrap-app-key are opt-in per ADR-0004.
+components:
+  - ../../components/ingress-traefik
+
+  # Opt-in: uncomment to enable Redis-queue-length-driven KEDA
+  # scaling for unit3d-queue. MUST be combined with deletion of the
+  # hpa/unit3d-queue-hpa.yaml entry from resources: above (two HPAs
+  # targeting the same Deployment cause oscillation). KEDA prereq:
+  # operator installs KEDA in the cluster — see
+  # components/keda-queue-scaler/README.md.
+  # - ../../components/keda-queue-scaler
+
+  # Off-default in prod per ADR-0004. Opt-in only for "deploy-and-go"
+  # first-time operators who want in-cluster APP_KEY generation.
+  # - ../../components/bootstrap-app-key
+
+# ---- ConfigMap merge ----
+# Merge values.env (operator-tunable: APP_URL, TRUSTED_PROXIES,
+# FILESYSTEM_<DISK>=s3 toggles) into the base unit3d-config ConfigMap.
+# behavior: merge requires kustomize >= v5.0; ratatoskr targets v5.7+.
+configMapGenerator:
+  - name: unit3d-config
+    behavior: merge
+    envs:
+      - values.env
+
+# ---- Patches ----
+# Defense-in-depth (config), multi-replica (app/queue), MariaDB sizing,
+# PVC RWX. Patch order: ConfigMap first (no dependency), then workload
+# patches.
+patches:
+  - path: patches/unit3d-config-prod.yaml
+    target:
+      kind: ConfigMap
+      name: unit3d-config
+  - path: patches/unit3d-app-multireplica.yaml
+    target:
+      kind: Deployment
+      name: unit3d-app
+  - path: patches/unit3d-queue-multireplica.yaml
+    target:
+      kind: Deployment
+      name: unit3d-queue
+  - path: patches/mariadb-resources.yaml
+    target:
+      kind: StatefulSet
+      name: mariadb
+  - path: patches/pvc-unit3d-storage-rwx.yaml
+    target:
+      kind: PersistentVolumeClaim
+      name: unit3d-storage

@@ -1,0 +1,40 @@
+# unit3d-storage PVC: ReadWriteMany + 50Gi for prod-rwx multi-replica
+# unit3d-app / unit3d-queue / unit3d-scheduler.
+#
+# accessModes RWO -> RWX is the entire reason prod-rwx exists as a
+# separate overlay (vs prod-rwo). All non-Storage-aware disks per
+# ADR-0002 (avatars, icons, torrent-banners, torrent-covers, article-
+# images, category-images, playlist-images, temporary-nfos, plus the
+# Laravel-default local/public/backups disks) live on this PVC and are
+# mounted by every unit3d-* pod. Without RWX, multi-replica is
+# impossible — a RWO volume cannot be multi-attached, so K8s would
+# pin all unit3d-* pods to a single node, defeating the prod-rwx HA
+# premise.
+#
+# 50Gi sized for image growth on a populated tracker (avatars + covers
+# + banners + article images run hundreds of MB to a few GB total at
+# 5K-10K users). Operators above that scale envelope bump in their
+# fork via patch override.
+#
+# CRITICAL: PVC accessModes is IMMUTABLE post-create. Kubernetes
+# rejects RWO -> RWX changes on existing PVCs. Operators upgrading
+# prod-rwo -> prod-rwx must provision a fresh PVC AND migrate the
+# image disk content — the v0.4 unified migration tool will cover
+# this end-to-end. Until v0.4 lands, fresh prod-rwx deploys only.
+# Documented in the prod-rwx README upgrade gotchas section.
+#
+# storage 5Gi -> 50Gi: same fresh-deploy constraint unless the
+# storage class supports VolumeExpansion AND the underlying RWX
+# provisioner allows online expansion (Longhorn yes, CephFS yes,
+# AzureFiles yes via Premium tier, EFS implicit no-quota, JuiceFS
+# yes via metadata).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: unit3d-storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi

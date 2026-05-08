@@ -1,0 +1,41 @@
+# Multi-replica + RollingUpdate + bumped resources for the prod-rwx
+# scale envelope (5K-10K active users on a 3-node cluster).
+#
+# replicas: 2 = the operating floor; HPA scales 2-10 based on CPU
+# (averageUtilization 70) and Memory (averageUtilization 80) per
+# hpa/unit3d-app-hpa.yaml.
+#
+# strategy: RollingUpdate with maxSurge: 1 / maxUnavailable: 0 — zero
+# pod-down during rolls. Combined with PDB minAvailable: 1, the
+# cluster always has at least 1 unit3d-app pod serving (HPA min: 2 -
+# PDB min: 1 = 1 pod can voluntarily drain at any moment without
+# violating either constraint).
+#
+# Resources: 1 CPU / 1 GiB requested, 4 CPU / 4 GiB limited. FrankenPHP
+# worker mode keeps a hot persistent app boot — real CPU is needed for
+# concurrent request handling, not request-burst. The 4 GiB limit
+# pairs with the entrypoint's GOMEMLIMIT auto-calc (90% = 3.6 GiB Go
+# runtime budget, leaves 400 MiB headroom for PHP runtime, opcache,
+# kernel buffers).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unit3d-app
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    spec:
+      containers:
+        - name: unit3d-app
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi

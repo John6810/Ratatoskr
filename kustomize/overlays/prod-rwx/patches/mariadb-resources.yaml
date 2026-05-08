@@ -1,0 +1,50 @@
+# MariaDB sizing for the 5K-10K user envelope per ADR-0001.
+#
+# Single replica preserved (HA topology = v0.7 Galera reopen target —
+# multi-replica MariaDB is out of scope at v0.3). Resources bumped 2x
+# base for InnoDB buffer pool sizing under sustained load:
+#   - 500m CPU requested, 2 CPU limit (vs base 250m / 1000m)
+#   - 1 GiB memory requested, 4 GiB limit (vs base 512Mi / 2Gi)
+# innodb_buffer_pool_size auto-tunes at startup based on available
+# memory (mariadbd default ~70% of available); operators tuning
+# explicitly patch via env in their fork.
+#
+# PVC bumped 10Gi -> 50Gi via VCT strategic merge with metadata.name
+# as the merge key (StatefulSet API standard for volumeClaimTemplates).
+#
+# CRITICAL: VCT updates only apply on FRESH StatefulSet deploy.
+# Kubernetes rejects accessModes / resources.requests.storage changes
+# on existing StatefulSets. Operators upgrading a prod-rwo cluster to
+# prod-rwx must either:
+#   (a) provision a fresh cluster and migrate data via mariabackup
+#       (the v0.2 backup pipeline supports this — restore on the new
+#       cluster from the prod-rwo cluster's backup);
+#   (b) expand the PVC via storage class capability if the underlying
+#       provisioner supports VolumeExpansion, then restart the
+#       StatefulSet.
+# Documented in the prod-rwx README upgrade gotchas section.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mariadb
+spec:
+  template:
+    spec:
+      containers:
+        - name: mariadb
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 50Gi

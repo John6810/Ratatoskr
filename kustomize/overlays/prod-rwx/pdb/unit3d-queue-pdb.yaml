@@ -1,0 +1,28 @@
+# PodDisruptionBudget for unit3d-queue.
+#
+# minAvailable: 1 applies cleanly under both autoscaling paths:
+#   - CPU HPA (default at v0.3 prod-rwx): minReplicas: 2, so PDB
+#     min: 1 leaves 1 pod available to drain at any time.
+#   - KEDA ScaledObject (opt-in via keda-queue-scaler Component):
+#     minReplicaCount: 2, same arithmetic. KEDA's underlying HPA
+#     respects PDB the same way a standard HPA does — voluntary
+#     disruptions wait for KEDA to spawn a replacement before
+#     evicting the old pod.
+#
+# Note: the queue Deployment's RollingUpdate uses K8s defaults
+# (maxSurge: 25%, maxUnavailable: 25%) rather than the strict
+# zero-downtime config used on unit3d-app. For replicas: 2, that
+# means 1 surging + 1 down at peak — within PDB tolerance because
+# queue jobs are picked up by the surviving replica and queue:work
+# graceful shutdown handles the in-flight job before SIGKILL.
+#
+# selector matches the base unit3d-queue Deployment's spec.selector.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: unit3d-queue
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: unit3d-queue

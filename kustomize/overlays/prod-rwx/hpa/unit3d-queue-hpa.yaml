@@ -1,0 +1,65 @@
+# =============================================================================
+# CPU-based HPA for unit3d-queue — DEFAULT at v0.3 prod-rwx.
+#
+# This HPA is REPLACED by the keda-queue-scaler Component when the
+# operator opts in. Two HPAs targeting the same Deployment cause
+# oscillation per Kubernetes documented limitations:
+#   https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/
+#   #known-limitations
+#
+# If you uncomment keda-queue-scaler in the overlay's components: list,
+# you MUST delete this HPA manifest from your overlay (or remove the
+# resources entry pointing to it in kustomization.yaml). See
+# components/keda-queue-scaler/README.md for the full constraint and
+# the recommended migration recipe.
+# =============================================================================
+#
+# minReplicas: 2 matches the unit3d-queue Deployment patch's
+# replicas: 2 baseline and the PDB minAvailable: 1.
+#
+# CPU only — queue worker memory is bounded by queue:work --max-time=
+# 3600 cycling workers naturally; CPU is the binding throughput
+# constraint for queue:work (Eloquent + Redis + occasional file I/O
+# per job; CPU saturation = real backlog growth).
+#
+# Behavior block: same as unit3d-app HPA verbatim. Both are bursty-
+# load workloads; consistent scaling dynamics across the app/queue
+# pair simplifies operator mental model. KEDA's behavior block in
+# components/keda-queue-scaler/scaledobject-queue.yaml mirrors this
+# pattern exactly so opt-in/opt-out doesn't change tuning intuition.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: unit3d-queue
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: unit3d-queue
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      selectPolicy: Min
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 120

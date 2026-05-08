@@ -1,0 +1,68 @@
+# HorizontalPodAutoscaler for unit3d-app, prod-rwx scale envelope
+# (5K-10K active users on a 3-node cluster).
+#
+# minReplicas: 2 matches the unit3d-app Deployment patch's replicas: 2
+# baseline (RollingUpdate maxSurge: 1 / maxUnavailable: 0 needs the
+# floor) and the PDB minAvailable: 1 (HPA min - PDB min = 1 pod can
+# voluntarily drain at any time).
+#
+# Two metrics, both averageUtilization (across all pods):
+#   - CPU 70 — FrankenPHP worker mode keeps a hot persistent app boot;
+#     CPU saturation = real concurrent-request pressure, scale out.
+#   - Memory 80 — opcache + APC + worker state grow with traffic;
+#     memory pressure reliably precedes CPU saturation under
+#     persistent-app load. Pairs with the entrypoint's GOMEMLIMIT
+#     auto-calc (90% of pod memory limit = 3.6 GiB Go runtime budget
+#     when limit is 4 GiB), so 80% utilization triggers scale-out
+#     before GC thrashing kicks in.
+#
+# Behavior block tuned for bursty-load resilience:
+#   - scaleUp: 30s stabilization, two policies select Max (the more
+#     aggressive applies). 100% growth per 60s OR 4 pods per 60s,
+#     whichever is faster — fast recovery from traffic spikes.
+#   - scaleDown: 300s (5 min) stabilization, single policy 50% per
+#     120s with selectPolicy: Min — conservative reduction, idle
+#     replicas cost little vs the latency of cold-start at the next
+#     spike. Mirrors the keda-queue-scaler scaleDown philosophy.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: unit3d-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: unit3d-app
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      selectPolicy: Min
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 120

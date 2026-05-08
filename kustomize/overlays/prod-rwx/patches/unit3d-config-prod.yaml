@@ -1,0 +1,22 @@
+# Defense-in-depth ConfigMap patch for prod-rwx. Identical content to
+# the prod-rwo equivalent — pinned production values for APP_ENV,
+# APP_DEBUG, LOG_LEVEL, MEILI_ENV at the overlay level so a future
+# base/ change cannot accidentally weaken production safety.
+#
+# TRUSTED_PROXIES is patched separately via values.env (operator-
+# tunable, may legitimately differ between RWO and RWX deployments
+# depending on ingress topology) — kept out of this defense-in-depth
+# block to preserve the "literal pins" semantic.
+#
+# VITE_ECHO_ADDRESS intentionally NOT set — UNIT3D v9.2.0 ships no
+# Reverb / WebSocket server. The base default
+# (http://localhost:8443) is functionally a no-op.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unit3d-config
+data:
+  APP_ENV: production
+  APP_DEBUG: "false"
+  LOG_LEVEL: info
+  MEILI_ENV: production

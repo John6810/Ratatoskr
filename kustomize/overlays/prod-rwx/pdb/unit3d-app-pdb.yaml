@@ -1,0 +1,28 @@
+# PodDisruptionBudget for unit3d-app.
+#
+# Math invariant for prod-rwx:
+#   HPA minReplicas:      2
+#   PDB minAvailable:     1
+#   Deployment maxUnavailable (RollingUpdate):  0
+#
+# Combined: at all times during voluntary disruption (node drain,
+# cluster upgrade) AND during rollouts, at least 1 unit3d-app pod is
+# serving. The HPA floor (2) - PDB floor (1) = 1 pod can voluntarily
+# drain at any moment without violating either constraint, while
+# RollingUpdate's maxUnavailable: 0 + maxSurge: 1 ensures the
+# replacement pod is ready BEFORE the old one terminates during a
+# deploy.
+#
+# selector matches the base unit3d-app Deployment's spec.selector
+# verbatim — base sets only app.kubernetes.io/name on the selector
+# (component kustomization labels block has includeSelectors: false,
+# so the org and component labels don't bleed into the selector).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: unit3d-app
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: unit3d-app
