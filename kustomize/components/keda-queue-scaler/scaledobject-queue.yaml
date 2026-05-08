@@ -1,0 +1,71 @@
+# KEDA ScaledObject for unit3d-queue. Scales the queue worker Deployment
+# horizontally based on the Laravel Redis queue backlog.
+#
+# Replaces the CPU-based HPA on unit3d-queue when this Component is
+# enabled — operators MUST NOT enable both. KEDA's underlying HPA fights
+# any user-managed HPA targeting the same Deployment; the result is
+# oscillation and no clear scaling signal.
+#
+# minReplicaCount: 2 keeps a hot-spare worker so the first job after a
+# quiet period doesn't pay for cold-start. maxReplicaCount: 8 caps the
+# fan-out so a runaway producer cannot spike the cluster bill; operators
+# raise this for high-volume trackers in their overlay.
+#
+# pollingInterval: 15 — KEDA polls Redis LLEN every 15s. cooldownPeriod:
+# 300 — after the queue empties, hold replicas for 5 minutes before
+# scaling back down to minReplicaCount (avoids thrashing on bursty
+# upload patterns where the next batch arrives within minutes).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: unit3d-queue
+  labels:
+    app.kubernetes.io/name: unit3d-queue
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    name: unit3d-queue
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: redis
+      metadata:
+        # FQDN required: KEDA's controller pod typically runs in the
+        # `keda` namespace (helm chart default). The short-name `redis`
+        # would resolve in KEDA's namespace, not `unit3d`. FQDN works
+        # regardless of where KEDA is installed.
+        address: redis.unit3d.svc.cluster.local:6379
+        # Laravel Redis queues use the prefix "queues:" + queue name.
+        # Default queue is "default" → list key "queues:default".
+        # Operators using named queues (--queue=high,default,low) patch
+        # listName per scaler, OR add multiple triggers (one per queue).
+        listName: queues:default
+        # Average backlog length per replica before triggering scale-out.
+        # 10 = ~10s of jobs at 1s avg processing time; tune per workload.
+        listLength: "10"
+        databaseIndex: "0"
+        enableTLS: "false"
+      authenticationRef:
+        name: unit3d-queue-redis-auth
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        # Scale up aggressively (queue backlog = user-visible latency).
+        # 100% growth per 15s window, no stabilization wait.
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+        # Scale down conservatively (idle workers cost little, churn
+        # from re-scheduling costs job latency at the next spike).
+        # 50% per minute, 5-minute stabilization window.
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 50
+              periodSeconds: 60

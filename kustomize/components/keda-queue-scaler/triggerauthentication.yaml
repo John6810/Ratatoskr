@@ -1,0 +1,27 @@
+# KEDA TriggerAuthentication: how the ScaledObject's redis trigger
+# authenticates against Redis. Maps the Secret key to the trigger
+# parameter name (KEDA's redis trigger expects `password`).
+#
+# secretTargetRef name: redis-secrets — the canonical secret name
+# from base/secrets-templates/, populated by the operator's sealed-
+# secrets workflow per ADR-0004. Same secret the unit3d-app /
+# unit3d-queue / unit3d-scheduler workloads consume via envFrom;
+# zero secret duplication.
+#
+# This resource lives in the unit3d namespace alongside the Secret —
+# KEDA's TriggerAuthentication is namespaced and must be co-located
+# with the secret it references (ClusterTriggerAuthentication exists
+# for cross-namespace, but is overkill here since both ScaledObject
+# and the worker Deployment are in unit3d).
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: unit3d-queue-redis-auth
+  labels:
+    app.kubernetes.io/name: unit3d-queue
+    app.kubernetes.io/component: worker
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: redis-secrets
+      key: REDIS_PASSWORD
