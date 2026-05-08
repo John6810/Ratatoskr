@@ -68,29 +68,31 @@ Completes the storage abstraction from v0.3 and ships migration tooling. **Hard-
 
 - Storage-aware writes land upstream → image disks flip from `local` to `s3` in the `config/filesystems.php` override (same ConfigMap pattern as v0.3, no manifest rewrite)
 - Documented backends: MinIO (self-hosted), Cloudflare R2 (zero egress), Backblaze B2 (cheap), AWS S3 (default mental model)
-- **Unified migration tool**: covers both Compose → K8s relocation and PVC → S3 split (Storage-aware disks at v0.3, image disks once upstream lands) in one pass. v0.1/v0.2 operators become first-class upgrade citizens at v0.4. Also covers `prod-rwo` → `prod-rwx` migrations (PVC `accessModes` immutability and MariaDB VCT bump documented as the v0.3 upgrade gotchas; the tool automates the data-copy + recreate dance).
+- ✅ **Unified migration tool** (`03b8aaf`, `496f506`): `scripts/migration/migrate-rwo-to-rwx.sh` covers in-place RWO→RWX PVC swap (Option B); `scripts/migration/migrate-compose-to-k8s.sh` covers Compose → K8s as a guided 8-step stepper with state persistence and three secrets-mode paths (sealed-secrets / ESO / vanilla). v0.1/v0.2 operators become first-class upgrade citizens. PVC → S3 split for image disks lands once upstream Storage-aware refactor merges.
 - Bucket policies, lifecycle rules, sample CORS config; storage-side backup story (S3 versioning + cross-region replication; PVC snapshots if any image disks remain)
 - `unit3d-app` becomes truly stateless once upstream lands → `replicas: N` works on any cluster, RWX no longer required for HA
-- **Documentation expansion**: `docs/architecture.md` (Mermaid diagrams of the Compose / Kustomize / ArgoCD topologies and the workload-to-secret wiring), `docs/upgrade-guide.md` (cross-version migrations: v0.2→v0.3 Compose-to-K8s, prod-rwo→prod-rwx, intermediate version skips), `docs/security-hardening.md` (TRUSTED_PROXIES tightening, NetworkPolicy egress fine-tuning, sealed-secrets vs ESO trade-offs in operator language), `docs/monitoring.md` (Prometheus + Grafana baseline, anticipates v0.8 observability work).
-- **`ingress-vanilla` Component pivot decision**. Per ADR-0003 the Component was originally planned alongside `ingress-traefik`. Pre-v0.4 reality check: ingress-nginx is reaching EOL March 2026 (per upstream announcement), and Gateway API has matured. A successor ADR will document the choice between (a) shipping `ingress-vanilla` targeting nginx + ALB on the legacy `Ingress` API, (b) pivoting straight to a `gateway-api` Component, or (c) doubling down on `ingress-traefik` as the only first-class path. Operator-input gated.
-- **Multi-queue KEDA pattern documentation**. Operators using Laravel named queues (`queue:work --queue=high,default,low`) need one ScaledObject per logical priority lane. v0.3 ships the single-queue `keda-queue-scaler` Component; v0.4 documents the multi-queue extension recipe (overlay-side patches against the Component, no Component fork required) and adds a multi-queue example overlay.
-- **Helm chart prep groundwork** (full chart delivery is v0.5). v0.4 lands the chart scaffolding under `helm/unit3d/`, the `Chart.yaml` baseline, and the `values.yaml` structure mirroring the Kustomize `values.env` conventions so operators migrating Kustomize → Helm have a 1:1 value mapping. `helm-lint` skill validates the scaffold.
+- ✅ **Documentation expansion**: `docs/architecture.md` (`11bd666`), `docs/upgrade-guide.md` (`52ac5ca`), `docs/security-hardening.md` (`f7af3a4`), `docs/monitoring.md` (`4e09e5c`).
+- `docs/multi-queue-scaling.md` — KEDA multi-ScaledObject pattern (one ScaledObject per Laravel named-queue priority lane, overlay-side patches against the v0.3 `keda-queue-scaler` Component, no Component fork required). Closes v0.4.
 
 **Scale envelope**: app tier scales freely. DB and `/announce` become the next bottlenecks. Conditional on upstream PRs; otherwise inherits the v0.3 RWX scale envelope.
 
-### v0.5.0 — Helm Chart 📋
+### v0.5.0 — Helm chart + Gateway API parity 📋
 
-Equivalent of the Kustomize tree, packaged for Helm-native operators.
+Helm parity with the Kustomize tree, plus a second supported ingress path. The two are paired: ADR-0006 formalizes Gateway API as a supported ingress alongside Traefik, and the Helm chart enumerates both modes via values toggles.
 
+- Helm chart at feature parity with Kustomize: `helm/unit3d/` directory, `Chart.yaml`, `values.yaml` schema mirroring Kustomize `values.env` conventions so operators migrating Kustomize → Helm have a 1:1 value mapping
 - Chart structured by component (`unit3d.*`, `mariadb.*`, `redis.*`, `meilisearch.*`)
 - Subchart toggles (`mariadb.enabled`, etc.) so operators can bring their own managed DB
 - Optional Bitnami subcharts as dependencies, custom fallbacks if disabled
 - Pre-install hooks for migrations
 - Helm tests
-- Published to Artifact Hub
+- Artifact Hub publication
 - `helm-lint` skill validates every PR
+- ADR-0006: Ingress controller pivot — Gateway API as supported path (formalizes the dual-ingress stance: Traefik default, Gateway API alternative)
+- `components/ingress-vanilla` — Gateway API resources (`HTTPRoute`, `Gateway`, `ReferenceGrant`) mirroring the `components/ingress-traefik` topology
+- Overlays test matrix expansion: `prod-rwo × prod-rwx × ingress-traefik × ingress-vanilla` = 4 combinations validated by `kustomize-validate` CI
 
-**Scale envelope**: same as v0.3, but with the Helm UX.
+**Scale envelope**: same as v0.3, with Helm UX and a second supported ingress path.
 
 ### v0.6.0 — High-Performance `/announce` ⭐ 📋
 
