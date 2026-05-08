@@ -1,0 +1,84 @@
+# ratatoskr ApplicationSet — reference template.
+#
+# Operators customize this file in their fork. ratatoskr ships it as
+# scaffolding; do not apply this file as-is from the upstream repo.
+#
+# TWO mandatory placeholders to replace before applying:
+#   - generators[0].git.repoURL   (line ~26)
+#   - template.spec.source.repoURL (line ~46)
+# Both must point to the operator's actual fork URL.
+#
+# Three usage patterns (smoke-test all overlays / single overlay /
+# multi-cluster Matrix generator) documented in argocd/README.md.
+#
+# Default behavior: discovers every overlay under kustomize/overlays/*
+# and creates one Application per overlay, deployed to per-overlay
+# namespaces (unit3d-dev, unit3d-prod-rwo, unit3d-prod-rwx) to avoid
+# resource name collisions on shared clusters.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: ratatoskr-overlays
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: ratatoskr
+    app.kubernetes.io/managed-by: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  # Git directory generator — auto-discovers overlays under
+  # kustomize/overlays/. Add a new overlay (e.g. prod-vanilla) by
+  # creating the directory; this ApplicationSet picks it up on next
+  # ArgoCD sync without YAML changes here.
+  generators:
+    - git:
+        repoURL: https://github.com/CHANGEME-OPERATOR/ratatoskr-fork.git
+        revision: main
+        directories:
+          - path: kustomize/overlays/*
+          # Operator: exclude overlays you don't deploy by adding
+          # exclude entries:
+          # - path: kustomize/overlays/dev
+          #   exclude: true
+
+  template:
+    metadata:
+      name: 'ratatoskr-{{.path.basename}}'
+      labels:
+        app.kubernetes.io/part-of: ratatoskr
+        ratatoskr.io/overlay: '{{.path.basename}}'
+    spec:
+      project: default
+
+      source:
+        repoURL: https://github.com/CHANGEME-OPERATOR/ratatoskr-fork.git
+        targetRevision: main
+        path: '{{.path.path}}'
+        kustomize:
+          # Override the namespace defined in the overlay's
+          # kustomization.yaml so each overlay deploys to its own
+          # namespace. This allows running multiple overlays on the
+          # same cluster (e.g. dev + prod-rwo for smoke-testing)
+          # without resource name collisions.
+          namespace: 'unit3d-{{.path.basename}}'
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'unit3d-{{.path.basename}}'
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 5m
