@@ -1,0 +1,51 @@
+# Traefik IngressRoute for unit3d-app. Two-Route split per ADR-0003 and
+# .claude/rules/k8s.md /announce traffic rules:
+#
+#   Route 1 — Host && PathPrefix(/announce)  → unit3d-app:80, NO middleware
+#   Route 2 — Host (catch-all)               → unit3d-app:80, rate-limit + security-headers
+#
+# Higher priority on Route 1 ensures /announce is matched before the
+# catch-all Route. The middleware-free Route 1 is the structural
+# enforcement of the /announce no-body-rewrite / no-redirect / no-gzip
+# hard rules — anyone reading this manifest sees the empty middleware
+# list on the announce route immediately.
+#
+# Host header is a placeholder; operators patch in their overlay to the
+# real tracker domain (and patch the Certificate's dnsNames in lockstep).
+# See ./README.md for the patch recipe.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: unit3d-app
+  labels:
+    app.kubernetes.io/name: unit3d-app
+    app.kubernetes.io/component: app
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    # Route 1: /announce — no middleware, higher priority.
+    - match: Host(`CHANGEME.example.org`) && PathPrefix(`/announce`)
+      kind: Rule
+      priority: 100
+      services:
+        - name: unit3d-app
+          namespace: unit3d
+          port: 80
+    # Route 2: catch-all — rate-limit + security-headers via Middlewares.
+    - match: Host(`CHANGEME.example.org`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: unit3d-app
+          namespace: unit3d
+          port: 80
+      middlewares:
+        - name: unit3d-rate-limit
+        - name: unit3d-security-headers
+  tls:
+    # cert-manager populates this Secret via the Certificate in
+    # certificate.yaml. With INGRESS_TLS=external (operator-patched),
+    # the entire tls block is dropped and traffic stays HTTP-only on
+    # entryPoint web — the upstream LB terminates TLS.
+    secretName: unit3d-tls

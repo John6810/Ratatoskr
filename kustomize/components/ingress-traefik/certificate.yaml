@@ -1,0 +1,27 @@
+# cert-manager Certificate. cert-manager watches this resource, requests
+# a cert from the referenced ClusterIssuer (Let's Encrypt via HTTP-01),
+# and writes the result into the Secret named at .spec.secretName. The
+# IngressRoute's tls.secretName references the same Secret name to
+# pick up the rotated cert automatically.
+#
+# dnsNames is a placeholder; operators patch in their overlay to the
+# real tracker domain (in lockstep with the IngressRoute's Host header).
+# The Component README documents the dual-patch recipe.
+#
+# Multi-domain operators (e.g. tracker.example.org + www.tracker.example.org)
+# add additional entries to dnsNames. SAN certs from Let's Encrypt
+# support up to 100 domains.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: unit3d-tls
+  labels:
+    app.kubernetes.io/name: unit3d-app
+    app.kubernetes.io/component: app
+spec:
+  secretName: unit3d-tls
+  dnsNames:
+    - CHANGEME.example.org
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer

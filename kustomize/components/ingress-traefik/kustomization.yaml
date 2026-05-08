@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# NOTE: no `labels:` block here. A Component's transformations propagate
+# to every resource in the parent kustomization (base + overlay), so a
+# labels block would overwrite the per-component labels on mariadb,
+# redis, meilisearch, unit3d-* in the parent's render — same gotcha
+# encountered with the bootstrap-app-key Component at v0.3 scaffolding.
+# Per-resource labels are inlined directly on each YAML.
+
+resources:
+  - ingressroute.yaml
+  - middlewares.yaml
+  - clusterissuer.yaml
+  - certificate.yaml

@@ -1,0 +1,34 @@
+# cert-manager ClusterIssuer for Let's Encrypt production. Cluster-scoped
+# (note: namespace transformations don't apply here — ClusterIssuer is
+# cluster-wide).
+#
+# OPERATORS WITH AN EXISTING letsencrypt-prod ClusterIssuer in their
+# cluster: remove this file from your fork's resources list. Two
+# ClusterIssuers with the same name conflict — the second apply
+# overwrites the first.
+#
+# HTTP-01 challenge default. Works when Traefik is configured to serve
+# both vanilla Ingress AND IngressRoute (the default for k3s and
+# helm-installed Traefik). Operators on Traefik-IngressRoute-only setups
+# patch to DNS-01 in their fork (per-DNS-provider config; see
+# https://cert-manager.io/docs/configuration/acme/dns01/).
+#
+# email is a placeholder; operators patch to a real address that
+# Let's Encrypt expiration warnings can reach.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/name: unit3d-app
+    app.kubernetes.io/component: app
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: CHANGEME@example.org
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
