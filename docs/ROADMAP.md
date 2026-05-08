@@ -46,7 +46,7 @@ The piece that makes v0.1 actually deployable for real.
 
 The first real Kubernetes deployment path. Targets a 3-node cluster. Architectural decisions captured in [ADR-0001](./adr/0001-database-deployment-topology.md), [ADR-0002](./adr/0002-storage-strategy-unit3d-storage.md), [ADR-0003](./adr/0003-ingress-controller-assumption.md), and [ADR-0004](./adr/0004-secret-management.md).
 
-- `kustomize/base/` for all components, overlays for `dev` / `staging` / `prod`
+- `kustomize/base/` for all components, overlays for `dev` / `prod-rwo` / `prod-rwx`. Staging environments are prod-rwo with overlay-level value patches (smaller resources, staging domain), not a distinct overlay tree — the differentiator that warrants a dedicated overlay is the storage access mode (RWO vs RWX), not the deployment environment.
 - **MariaDB**: embedded StatefulSet by default, Kustomize toggle for managed DB (RDS, Aiven, OVH). HA topology deferred to v0.7.
 - **`unit3d-storage`**: hybrid — three disks (`torrent-files`, `subtitle-files`, `attachment-files`) on operator-supplied S3-compatible storage; image disks (avatars, covers, banners, etc.) on PVC. Vanilla UNIT3D image preserved via ConfigMap-mounted `config/filesystems.php` override. Two prod modes: RWX storage class → multi-replica HA; RWO only → `replicas: 1` + `Recreate`.
 - Deployment + HorizontalPodAutoscaler on `unit3d-app` (CPU + KEDA Redis-queue-length) — effective in RWX mode at v0.3
