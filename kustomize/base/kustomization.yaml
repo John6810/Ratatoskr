@@ -27,5 +27,6 @@ labels:
 
 resources:
   - namespace.yaml
+  - mariadb
   - redis
   - meilisearch

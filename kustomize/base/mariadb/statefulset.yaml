@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mariadb
+spec:
+  serviceName: mariadb
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mariadb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mariadb
+    spec:
+      # MariaDB writes to its data dir during InnoDB recovery on every boot;
+      # 60s is generous but bounded. The Compose stack uses start_period: 30s
+      # in healthcheck.sh which is comparable.
+      terminationGracePeriodSeconds: 60
+      # mariadb:11 ships a native mysql user at UID/GID 999. ratatoskr keeps
+      # the upstream UID per the convention established in ADR scaffolding —
+      # components with a native user (Redis 999, MariaDB 999, www-data 33)
+      # keep theirs; only images that ship as root with no non-root user
+      # (Meilisearch) get UID 65532.
+      #
+      # fsGroup 999 makes the empty PVC mount group-writable for the mysql
+      # user, since the storage class typically provisions volumes as root
+      # and the image's own /var/lib/mysql ownership is masked by the mount.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+        - name: mariadb
+          image: mariadb:11
+          imagePullPolicy: IfNotPresent
+          # Mirrors compose/docker-compose.yml:12-19. The official mariadb
+          # entrypoint reads MARIADB_* on first boot to bootstrap the root
+          # password, the unit3d database, and the unit3d user. Subsequent
+          # boots skip bootstrap (data dir already initialised).
+          #
+          # MARIADB_BACKUP_PASSWORD is intentionally NOT injected at first
+          # boot — the backup user is granted manually post-bootstrap (or
+          # by a future unit3d-migrate-style Job), per the v0.2 backup
+          # pipeline operator guide. The Secret holds the value; this
+          # container does not consume it directly.
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secrets
+                  key: MARIADB_ROOT_PASSWORD
+            - name: MARIADB_DATABASE
+              value: unit3d
+            - name: MARIADB_USER
+              value: unit3d
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secrets
+                  key: DB_PASSWORD
+          ports:
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # healthcheck.sh ships with mariadb:11 (since 10.11). --connect
+          # opens a connection; --innodb_initialized waits for InnoDB
+          # recovery to finish, which is what we actually need before
+          # letting unit3d-migrate or app pods connect.
+          startupProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            # readOnlyRootFilesystem: true requires emptyDir mounts for
+            # paths mysqld writes to outside the data dir.
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /run/mysqld
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # storageClassName intentionally omitted — falls back to the
+        # cluster default StorageClass per .claude/rules/k8s.md.
+        resources:
+          requests:
+            # 10Gi base default — conservative starting point. Overlays
+            # patch up: dev keeps 10Gi, staging/prod scale per scale
+            # envelope (5K–10K users in v0.3 prod ≈ 20–50 GiB observed in
+            # comparable trackers; revisit per operator data).
+            storage: 10Gi
