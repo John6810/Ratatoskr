@@ -42,24 +42,25 @@ The piece that makes v0.1 actually deployable for real.
 
 **Scale envelope**: same as v0.1, but recoverable.
 
-### v0.3.0 — Kubernetes Production Overlay 📋
+### v0.3.0 — Kubernetes Production Overlay — Released 2026-05-08 ✅
 
-The first real Kubernetes deployment path. Targets a 3-node cluster. Architectural decisions captured in [ADR-0001](./adr/0001-database-deployment-topology.md), [ADR-0002](./adr/0002-storage-strategy-unit3d-storage.md), [ADR-0003](./adr/0003-ingress-controller-assumption.md), and [ADR-0004](./adr/0004-secret-management.md).
+The first real Kubernetes deployment path. Architectural decisions captured in [ADR-0001](./adr/0001-database-deployment-topology.md), [ADR-0002](./adr/0002-storage-strategy-unit3d-storage.md), [ADR-0003](./adr/0003-ingress-controller-assumption.md), [ADR-0004](./adr/0004-secret-management.md), and [ADR-0005](./adr/0005-ha-boundary-v0.3.md).
 
-- `kustomize/base/` for all components, overlays for `dev` / `prod-rwo` / `prod-rwx`. Staging environments are prod-rwo with overlay-level value patches (smaller resources, staging domain), not a distinct overlay tree — the differentiator that warrants a dedicated overlay is the storage access mode (RWO vs RWX), not the deployment environment.
-- **MariaDB**: embedded StatefulSet by default, Kustomize toggle for managed DB (RDS, Aiven, OVH). HA topology deferred to v0.7.
-- **`unit3d-storage`**: hybrid — three disks (`torrent-files`, `subtitle-files`, `attachment-files`) on operator-supplied S3-compatible storage; image disks (avatars, covers, banners, etc.) on PVC. Vanilla UNIT3D image preserved via ConfigMap-mounted `config/filesystems.php` override. Two prod modes: RWX storage class → multi-replica HA; RWO only → `replicas: 1` + `Recreate`.
-- Deployment + HorizontalPodAutoscaler on `unit3d-app` (CPU + KEDA Redis-queue-length) — effective in RWX mode at v0.3
-- Separate Deployments for queue worker and scheduler (CronJob)
-- NetworkPolicy default-deny + explicit allows (CoreDNS egress, intra-namespace, ingress)
-- PodDisruptionBudget on every workload with HPA
-- **Ingress**: default Traefik `IngressRoute` + cert-manager (Let's Encrypt); alternative cluster-agnostic `Ingress` overlay for nginx-ingress / AWS ALB / GCE. TLS-source toggle for upstream-LB termination (Cloudflare, ACM). `/announce` middleware constraints documented as hard rules in `.claude/rules/k8s.md`; trusted proxy headers mandatory.
-- **Secrets**: sealed-secrets default + external-secrets-operator alternative via Kustomize component. `<component>-secrets` naming convention. `APP_KEY` operator-supplied by default; opt-in self-bootstrap Job for first-time operators.
-- ArgoCD `ApplicationSet` template for GitOps adoption
-- `kustomize-validate` skill catches manifest drift before commit; `k8s-reviewer` agent runs on every PR touching manifests
-- **Migration policy**: targets fresh deployments. Existing v0.1/v0.2 Compose operators stay on Compose until v0.4 ships unified migration tooling.
+- ✅ `kustomize/base/` (23 resources) and three overlays — `dev`, `prod-rwo`, `prod-rwx`. `staging` was dropped from scope: operator-tunable values on `prod-rwo`, not a distinct overlay tree (the differentiator that warrants a dedicated overlay is the storage access mode, not the deployment environment).
+- ✅ **MariaDB**: embedded StatefulSet, single-replica until v0.7 Galera per ADR-0001. The managed-DB toggle (RDS / Aiven / OVH) is documented in ADR-0001 but not yet shipped as a Kustomize component — operators on managed DB wire the connection manually at v0.3.
+- ✅ **`unit3d-storage`**: hybrid storage per ADR-0002 — three Storage-aware disks (`torrent-files`, `subtitle-files`, `attachment-files`) flip to S3 in `prod-rwx`; image disks stay on PVC pending upstream Storage-aware-writes refactor (tracked in [docs/upstream-prs.md](./upstream-prs.md), v0.4 dependency). ConfigMap-mounted `config/filesystems.php` override preserves the vanilla UNIT3D image.
+- ✅ HPA on `unit3d-app` (CPU 70 + Memory 80, min 2 / max 10) and on `unit3d-queue` (CPU 70, min 2 / max 8) at `prod-rwx`. KEDA Redis-queue-length scaler shipped as opt-in Component (`components/keda-queue-scaler`) — replaces the CPU HPA on `unit3d-queue` when activated; the two are mutually exclusive.
+- ✅ Separate Deployments for queue worker (`queue:work`) and scheduler. **Scope evolution**: scheduler is a long-running Deployment running `php artisan schedule:work` (Laravel 10+ self-scheduling primitive), not a CronJob. Scheduler is a hard single-replica per ADR-0005 (multiple schedulers = duplicate cron firings).
+- ✅ NetworkPolicy default-deny + explicit allows (CoreDNS egress, intra-namespace, `unit3d-app` ingress, `unit3d-egress-https`). 8 NetworkPolicies under `kustomize/base/networkpolicies/`.
+- ✅ PodDisruptionBudget on `unit3d-app` and `unit3d-queue` (`minAvailable: 1`) at `prod-rwx`. No PDB on `unit3d-scheduler` (single-replica makes PDB meaningless).
+- ✅ **Ingress** via the `ingress-traefik` Component (Traefik `IngressRoute` + Middlewares + cert-manager `ClusterIssuer` + `Certificate`). Two-Route split structurally enforces the `/announce` no-middleware contract per ADR-0003. `ingress-vanilla` Component deferred to v0.4 (per ADR-0003 amendment — operator-demand-gated). TLS-source toggle (`letsencrypt` / `external` for upstream LB) honored. Trusted proxy headers mandatory.
+- ✅ **Secrets**: sealed-secrets default per ADR-0004, with `secrets-templates/` reference subdirectory under `kustomize/base/`. `<component>-secrets` naming convention enforced. `APP_KEY` operator-supplied via sealed-secrets in prod; opt-in `bootstrap-app-key` Component for "deploy-and-go" first-time operators. ESO alternative documented in ADR-0004; the ESO toggle Component itself is not shipped (operators wire `ExternalSecret` manifests manually).
+- ✅ ArgoCD `ApplicationSet` template under `argocd/` with Git directory generator + 3 usage patterns (smoke-test, single overlay, multi-cluster Matrix).
+- ✅ `kustomize-validate` skill catches manifest drift before commit; `k8s-reviewer` agent runs on every PR touching manifests.
+- ✅ **Dockerfile entrypoint cgroup-aware GOMEMLIMIT** (commit `64a5d7c`) — reads pod cgroup memory limit at start and sets `GOMEMLIMIT` to 90% to prevent OOMKill events under Go GC pressure. Operator override preserved.
+- ✅ **Migration policy**: targets fresh deployments. Existing v0.1/v0.2 Compose operators stay on Compose until v0.4 ships unified migration tooling.
 
-**Scale envelope**: 5,000–10,000 active users on a 3-node cluster (RWX mode). RWO mode caps at single-replica throughput.
+**Scale envelope**: 5,000–10,000 active users on a 3-node cluster (`prod-rwx` mode). `prod-rwo` mode caps at single-replica throughput, suitable for ~1K-3K active users.
 
 ### v0.4.0 — S3 Storage Migration & Full Statelessness 📋
 
@@ -67,9 +68,13 @@ Completes the storage abstraction from v0.3 and ships migration tooling. **Hard-
 
 - Storage-aware writes land upstream → image disks flip from `local` to `s3` in the `config/filesystems.php` override (same ConfigMap pattern as v0.3, no manifest rewrite)
 - Documented backends: MinIO (self-hosted), Cloudflare R2 (zero egress), Backblaze B2 (cheap), AWS S3 (default mental model)
-- **Unified migration tool**: covers both Compose → K8s relocation and PVC → S3 split (Storage-aware disks at v0.3, image disks once upstream lands) in one pass. v0.1/v0.2 operators become first-class upgrade citizens at v0.4.
+- **Unified migration tool**: covers both Compose → K8s relocation and PVC → S3 split (Storage-aware disks at v0.3, image disks once upstream lands) in one pass. v0.1/v0.2 operators become first-class upgrade citizens at v0.4. Also covers `prod-rwo` → `prod-rwx` migrations (PVC `accessModes` immutability and MariaDB VCT bump documented as the v0.3 upgrade gotchas; the tool automates the data-copy + recreate dance).
 - Bucket policies, lifecycle rules, sample CORS config; storage-side backup story (S3 versioning + cross-region replication; PVC snapshots if any image disks remain)
 - `unit3d-app` becomes truly stateless once upstream lands → `replicas: N` works on any cluster, RWX no longer required for HA
+- **Documentation expansion**: `docs/architecture.md` (Mermaid diagrams of the Compose / Kustomize / ArgoCD topologies and the workload-to-secret wiring), `docs/upgrade-guide.md` (cross-version migrations: v0.2→v0.3 Compose-to-K8s, prod-rwo→prod-rwx, intermediate version skips), `docs/security-hardening.md` (TRUSTED_PROXIES tightening, NetworkPolicy egress fine-tuning, sealed-secrets vs ESO trade-offs in operator language), `docs/monitoring.md` (Prometheus + Grafana baseline, anticipates v0.8 observability work).
+- **`ingress-vanilla` Component pivot decision**. Per ADR-0003 the Component was originally planned alongside `ingress-traefik`. Pre-v0.4 reality check: ingress-nginx is reaching EOL March 2026 (per upstream announcement), and Gateway API has matured. A successor ADR will document the choice between (a) shipping `ingress-vanilla` targeting nginx + ALB on the legacy `Ingress` API, (b) pivoting straight to a `gateway-api` Component, or (c) doubling down on `ingress-traefik` as the only first-class path. Operator-input gated.
+- **Multi-queue KEDA pattern documentation**. Operators using Laravel named queues (`queue:work --queue=high,default,low`) need one ScaledObject per logical priority lane. v0.3 ships the single-queue `keda-queue-scaler` Component; v0.4 documents the multi-queue extension recipe (overlay-side patches against the Component, no Component fork required) and adds a multi-queue example overlay.
+- **Helm chart prep groundwork** (full chart delivery is v0.5). v0.4 lands the chart scaffolding under `helm/unit3d/`, the `Chart.yaml` baseline, and the `values.yaml` structure mirroring the Kustomize `values.env` conventions so operators migrating Kustomize → Helm have a 1:1 value mapping. `helm-lint` skill validates the scaffold.
 
 **Scale envelope**: app tier scales freely. DB and `/announce` become the next bottlenecks. Conditional on upstream PRs; otherwise inherits the v0.3 RWX scale envelope.
 
