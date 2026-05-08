@@ -45,3 +45,4 @@ resources:
   - unit3d-app
   - unit3d-queue
   - unit3d-scheduler
+  - networkpolicies

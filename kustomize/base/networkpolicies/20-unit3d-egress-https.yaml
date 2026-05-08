@@ -1,0 +1,52 @@
+# Egress on TCP 443 to public internet (anywhere except cluster-internal
+# RFC1918 ranges and link-local). Covers:
+#
+#   - S3-compatible storage backends for the three Storage-aware disks
+#     per ADR-0002. Operator-supplied endpoint reachable on 443
+#     (AWS S3, Cloudflare R2, Backblaze B2, MinIO behind ingress).
+#   - OAuth providers if UNIT3D operator enables external login.
+#   - SMTP-over-TLS via transactional email APIs (Mailgun, SES API,
+#     SendGrid HTTPS endpoints — all 443). Operators using SMTP+STARTTLS
+#     on 587 or implicit TLS on 465 patch this policy in their overlay;
+#     587/465 are NOT allowed by default.
+#
+# Excluded ranges:
+#   - 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 — RFC1918 private space
+#     (cluster-internal traffic should not leak to "public" 443 path).
+#   - 169.254.0.0/16 — link-local + cloud metadata services (AWS IMDS,
+#     GCP metadata, Azure IMDS). Important to exclude even though
+#     ratatoskr has no business calling them — defense against
+#     credential exfiltration via SSRF in the app tier.
+#
+# Restricting per-FQDN (e.g. only s3.amazonaws.com + login.example.com)
+# requires Cilium L7 or Calico GlobalNetworkPolicy with FQDNs — out of
+# scope at v0.3 base. Operators on Cilium can layer a
+# CiliumNetworkPolicy in their overlay.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: unit3d-egress-https
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - app
+          - worker
+          - scheduler
+          - migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

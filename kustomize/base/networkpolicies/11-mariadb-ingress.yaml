@@ -1,0 +1,36 @@
+# Ingress to MariaDB from UNIT3D workloads + backup component. The
+# backup component is pre-authorized so the v0.4 backup K8s integration
+# (port of the v0.2 ratatoskr-backup pipeline, currently MariaDB-only
+# via mariabackup) does not need to amend this policy at the time of
+# landing — operators can roll the backup component without touching
+# base/networkpolicies/.
+#
+# UNIT3D workloads cover unit3d-app, unit3d-queue, unit3d-scheduler,
+# and unit3d-migrate; all consume mariadb:3306 via Eloquent.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mariadb-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mariadb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - app
+                  - worker
+                  - scheduler
+                  - migration
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backup
+      ports:
+        - protocol: TCP
+          port: 3306

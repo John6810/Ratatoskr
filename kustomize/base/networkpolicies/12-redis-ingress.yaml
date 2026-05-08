@@ -1,0 +1,32 @@
+# Ingress to Redis from UNIT3D workloads only.
+#
+# Backup component intentionally not allowed at v0.3 — the v0.2 backup
+# pipeline targets MariaDB only (mariabackup physical backups). If v0.4
+# introduces Redis backup (Restic snapshot of AOF, separate Job, etc.),
+# the commit that adds those backup workloads is the right place to
+# expand this policy. Principle of least privilege at v0.3 — open
+# nothing speculatively.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - app
+                  - worker
+                  - scheduler
+                  - migration
+      ports:
+        - protocol: TCP
+          port: 6379

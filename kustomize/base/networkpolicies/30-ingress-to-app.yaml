@@ -1,0 +1,34 @@
+# Ingress to unit3d-app on TCP 80 from any pod in a namespace labeled
+# `network.ratatoskr.io/ingress=true`. The label is operator-controlled —
+# operators install their ingress controller (Traefik, nginx-ingress,
+# AWS ALB, etc. — see ADR-0003) in a namespace and add the label so the
+# controller's pods can reach unit3d-app.
+#
+# Operator command (one-shot per cluster):
+#   kubectl label namespace traefik-system network.ratatoskr.io/ingress=true
+#   # or, for nginx-ingress in the ingress-nginx namespace:
+#   kubectl label namespace ingress-nginx network.ratatoskr.io/ingress=true
+#
+# This is L3/L4. /announce-specific routing rules and the trusted-proxy
+# chain happen at the ingress controller level (per ADR-0003 and the
+# /announce hard rules in .claude/rules/k8s.md), not in NetworkPolicy.
+# A NetworkPolicy cannot enforce "no body-rewriting middleware" — that
+# is the controller's responsibility.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-to-unit3d-app
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: unit3d-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.ratatoskr.io/ingress: "true"
+      ports:
+        - protocol: TCP
+          port: 80

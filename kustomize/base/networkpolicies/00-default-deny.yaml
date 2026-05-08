@@ -1,0 +1,18 @@
+# Default-deny ingress and egress for the entire unit3d namespace. Every
+# other NetworkPolicy in this directory is an additive allow on top.
+# Per .claude/agents/k8s-reviewer.md rule #11, without this baseline all
+# other NetPols are decorative — the namespace permits everything except
+# what explicit denies block, which is the inverse of what we want.
+#
+# podSelector: {} matches every pod in the namespace. policyTypes lists
+# both, and the spec specifies neither ingress: nor egress: keys —
+# that's the canonical "deny everything" idiom.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

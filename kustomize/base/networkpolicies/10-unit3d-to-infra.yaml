@@ -1,0 +1,50 @@
+# Egress from UNIT3D workloads (app, queue worker, scheduler, migrate Job)
+# to the three stateful infrastructure services (mariadb, redis,
+# meilisearch). Each service-port pair is explicit; no wildcards.
+#
+# Component labels per CLAUDE.md and the v0.3 ADR conventions:
+#   app.kubernetes.io/component = app | worker | scheduler | migration
+#
+# matchExpressions In covers all four UNIT3D workload types in one rule
+# rather than four separate policies. A future workload (e.g. a one-off
+# bootstrap Job for the backup user GRANT) can adopt one of these
+# component values and inherit the egress rights without amending the
+# policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: unit3d-to-infra-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - app
+          - worker
+          - scheduler
+          - migration
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mariadb
+      ports:
+        - protocol: TCP
+          port: 3306
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: meilisearch
+      ports:
+        - protocol: TCP
+          port: 7700

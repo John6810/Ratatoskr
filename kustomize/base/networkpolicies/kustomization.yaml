@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Component-specific labels for the NetworkPolicy bundle. Resource-level
+# labels only — selectors INSIDE each NetworkPolicy spec are explicit
+# and reference workload labels (app.kubernetes.io/component,
+# app.kubernetes.io/name) that live on the pods themselves, not on the
+# NetworkPolicy resources.
+#
+# includeTemplates is set true for consistency with other component
+# kustomizations; it's a no-op for NetworkPolicy resources (which have
+# no spec.template).
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/name: networkpolicies
+      app.kubernetes.io/component: network
+
+resources:
+  - 00-default-deny.yaml
+  - 01-allow-dns.yaml
+  - 10-unit3d-to-infra.yaml
+  - 11-mariadb-ingress.yaml
+  - 12-redis-ingress.yaml
+  - 13-meilisearch-ingress.yaml
+  - 20-unit3d-egress-https.yaml
+  - 30-ingress-to-app.yaml

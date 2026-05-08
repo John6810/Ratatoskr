@@ -1,0 +1,31 @@
+# Egress allow for DNS resolution. Without this, every pod in the
+# namespace fails to resolve DNS — service discovery breaks (mariadb,
+# redis, meilisearch all become unreachable), inter-namespace traffic
+# is blocked. Per .claude/agents/k8s-reviewer.md rule #14, missing
+# this is CRITICAL.
+#
+# kube-system is the conventional namespace for CoreDNS in standard
+# Kubernetes distributions. Operators with CoreDNS deployed elsewhere
+# (k3s might use kube-system too; some managed platforms differ) patch
+# the namespaceSelector value in their overlay.
+#
+# Both UDP 53 (the default for typical lookups) and TCP 53 (large
+# responses, EDNS0 fallback) are allowed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
