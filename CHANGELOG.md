@@ -4,6 +4,68 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.3.0] — 2026-05-08
+
+Kubernetes deployment cycle. Three production-grade Kustomize overlays
+(`dev`, `prod-rwo`, `prod-rwx`), three reusable Components, five
+Architecture Decision Records, an ArgoCD ApplicationSet reference, and a
+critical Dockerfile fix for Go runtime memory behavior under Kubernetes
+pod memory limits.
+
+### Added
+
+- Three Kustomize overlays under `kustomize/overlays/`: `dev`,
+  `prod-rwo`, `prod-rwx`. `prod-rwo` for clusters without RWX storage
+  (single-replica + Recreate). `prod-rwx` for HA-capable clusters
+  (multi-replica + RollingUpdate + HPA + PDB + S3 routing for the
+  3 Storage-aware disks).
+- Three reusable Kustomize Components under `kustomize/components/`:
+  - `bootstrap-app-key`: opt-in in-cluster APP_KEY generation Job
+    (off-default in prod per ADR-0004).
+  - `ingress-traefik`: Traefik `IngressRoute` (two-Route split for
+    `/announce` no-middleware enforcement) + Middlewares + cert-manager
+    `ClusterIssuer` + `Certificate`.
+  - `keda-queue-scaler`: opt-in KEDA Redis-queue-length-driven
+    autoscaler for `unit3d-queue` workers.
+- Five Architecture Decision Records in `docs/adr/`:
+  - ADR-0001 Database deployment topology (MariaDB embedded,
+    single-replica until v0.7 Galera).
+  - ADR-0002 Storage strategy for `unit3d-storage` (S3 hybrid for the
+    3 Storage-aware disks, PVC for the 14 image disks).
+  - ADR-0003 Ingress controller assumption (Component-based
+    decomposition per amendment).
+  - ADR-0004 Secret management (sealed-secrets default, ESO
+    alternative, APP_KEY operator-supplied).
+  - ADR-0005 HA boundary at v0.3 (which components scale, which are
+    single-replica by design vs deferral).
+- ArgoCD `ApplicationSet` reference template under `argocd/` with Git
+  directory generator auto-discovering overlays + 3 usage patterns
+  README (smoke-test, single overlay, multi-cluster Matrix).
+- Base Kustomize manifests under `kustomize/base/` (23 resources):
+  Namespace, MariaDB / Redis / MeiliSearch StatefulSets,
+  unit3d-app/queue/scheduler Deployments, unit3d-migrate Job,
+  ConfigMaps, unit3d-storage PVC, 8 NetworkPolicies, secrets-templates
+  reference subdirectory.
+
+### Fixed
+
+- Dockerfile entrypoint now reads the pod's cgroup memory limit at
+  pod start and sets `GOMEMLIMIT` to 90% of the limit, preventing
+  Go GC thrashing and OOMKill events under Kubernetes pod memory
+  pressure. Operator override via explicit `GOMEMLIMIT` env preserved.
+
+### Changed
+
+- ADR-0003 (Ingress controller assumption) amended: ingress controller
+  is now a composable Kustomize Component (`ingress-traefik` shipped,
+  `ingress-vanilla` deferred) rather than two first-class overlays,
+  resolving the storage × ingress combinatorial.
+- ROADMAP v0.3 scope: dropped `staging` overlay (operator-tunable
+  values on `prod-rwo`, not a distinct overlay tree — the differentiator
+  that warrants a dedicated overlay is the storage access mode).
+
+[v0.3.0]: https://github.com/John6810/Ratatoskr/compare/v0.2.0...v0.3.0
+
 ## [v0.2.0] — 2026-05-05
 
 Backup & restore for the Compose stack. Ships a dedicated
