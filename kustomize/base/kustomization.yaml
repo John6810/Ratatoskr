@@ -31,3 +31,4 @@ resources:
   - redis
   - meilisearch
   - unit3d-migrate
+  - unit3d-app

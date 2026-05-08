@@ -1,0 +1,149 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unit3d-app
+spec:
+  replicas: 1
+  # Recreate strategy is mandatory at base/ because the unit3d-storage PVC
+  # is ReadWriteOnce — RollingUpdate would deadlock on the PVC held by the
+  # outgoing pod. Per ADR-0002, the prod-rwx overlay patches both
+  # `replicas` and `strategy` (multi-replica + RollingUpdate) once the PVC
+  # is RWX-class. The prod-rwo overlay keeps these defaults.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: unit3d-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: unit3d-app
+    spec:
+      # Generous grace for in-flight HTTP requests to drain. FrankenPHP's
+      # worker mode handles SIGTERM by finishing the current request batch
+      # before exiting; 60s covers comfortably worst-case Laravel responses.
+      terminationGracePeriodSeconds: 60
+      # www-data is UID 33 in the dunglas/frankenphp Debian-based runtime.
+      # The Dockerfile chowns /app/storage, /app/bootstrap/cache, /data/caddy,
+      # and /config/caddy to www-data and switches USER www-data before
+      # exposing ports. fsGroup 33 makes the unit3d-storage PVC mount
+      # group-writable for the same user.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: unit3d-app
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          # envFrom pulls the shared unit3d-config ConfigMap (non-sensitive)
+          # and the four MUST-EXIST component Secrets, plus the OPTIONAL
+          # unit3d-storage-secrets which the prod overlay populates with S3
+          # credentials for the three Storage-aware disks per ADR-0002.
+          # When unit3d-storage-secrets is absent (dev/staging/prod-rwo),
+          # the env() guards in config/filesystems.php fall back to 'local'.
+          envFrom:
+            - configMapRef:
+                name: unit3d-config
+            - secretRef:
+                name: unit3d-secrets
+            - secretRef:
+                name: mariadb-secrets
+            - secretRef:
+                name: redis-secrets
+            - secretRef:
+                name: meilisearch-secrets
+            - secretRef:
+                name: unit3d-storage-secrets
+                optional: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # FrankenPHP serves UNIT3D on port 80; Compose stack uses curl on /
+          # which returns 200 (authenticated views) or 302 (anonymous redirect
+          # to /login). K8s httpGet treats any 2xx/3xx as healthy, so the
+          # same shape works without curl in the container.
+          #
+          # startupProbe: 30 × 5s = 150s max for cold-start (composer
+          # autoload + opcache warm + first FrankenPHP worker boot). Once it
+          # succeeds, liveness and readiness kick in.
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 4
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 4
+            failureThreshold: 3
+          volumeMounts:
+            # ratatoskr's config/filesystems.php override (ADR-0002).
+            # subPath is critical: without it, the volume mount would
+            # mask the entire /app/config directory, hiding upstream's
+            # other config files. With subPath, only filesystems.php is
+            # overlaid. The ConfigMap suffix hash (configMapGenerator
+            # default) ensures content changes trigger a Deployment
+            # rollout — even with subPath, the new ConfigMap name forces
+            # pod recreation.
+            - name: filesystems-config
+              mountPath: /app/config/filesystems.php
+              subPath: filesystems.php
+              readOnly: true
+            # Shared with unit3d-migrate (and later unit3d-queue,
+            # unit3d-scheduler) — same PVC name, same mount path.
+            - name: storage
+              mountPath: /app/storage
+            # readOnlyRootFilesystem: true requires emptyDir mounts for
+            # every path the runtime writes to outside the data PVC.
+            # The Dockerfile chowns these four paths to www-data; we
+            # provide writable mounts for each.
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: caddy-data
+              mountPath: /data/caddy
+            - name: caddy-config
+              mountPath: /config/caddy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: filesystems-config
+          configMap:
+            name: unit3d-filesystems-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: unit3d-storage
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
