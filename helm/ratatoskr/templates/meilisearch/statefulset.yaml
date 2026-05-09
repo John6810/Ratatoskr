@@ -1,0 +1,109 @@
+{{- if .Values.meilisearch.enabled }}
+{{- $fullName := include "ratatoskr.meilisearch.fullname" . -}}
+{{- $component := "search" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: meilisearch
+spec:
+  serviceName: {{ $fullName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/name: meilisearch
+  template:
+    metadata:
+      labels:
+        {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        app.kubernetes.io/name: meilisearch
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        {{- toYaml .Values.meilisearch.podSecurityContext | nindent 8 }}
+      containers:
+        - name: meilisearch
+          image: {{ include "ratatoskr.image" (dict "image" .Values.meilisearch.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.meilisearch.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: MEILI_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ratatoskr.meilisearch.secretName" . | quote }}
+                  key: {{ include "ratatoskr.meilisearch.masterKeyKey" . | quote }}
+            - name: MEILI_ENV
+              value: {{ .Values.meilisearch.env | default "production" | quote }}
+            - name: MEILI_NO_ANALYTICS
+              value: "true"
+            {{- if .Values.meilisearch.experimentalMetrics }}
+            - name: MEILI_EXPERIMENTAL_ENABLE_METRICS
+              value: "true"
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 7700
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.meilisearch.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /meili_data
+            # Defensive emptyDir for any transient /tmp writes —
+            # readOnlyRootFilesystem would otherwise block them.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  {{- if .Values.meilisearch.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "ratatoskr.labels" . | nindent 10 }}
+          app.kubernetes.io/component: search
+          app.kubernetes.io/name: meilisearch
+      spec:
+        accessModes:
+          - {{ .Values.meilisearch.persistence.accessMode | quote }}
+        {{- $sc := include "ratatoskr.storageClass" (dict "scoped" .Values.meilisearch.persistence.storageClass "global" .Values.global.storageClass) }}
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.meilisearch.persistence.size | quote }}
+  {{- end }}
+{{- end }}

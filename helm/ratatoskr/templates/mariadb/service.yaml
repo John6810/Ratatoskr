@@ -1,0 +1,22 @@
+{{- if .Values.mariadb.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ratatoskr.mariadb.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+    app.kubernetes.io/name: mariadb
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ratatoskr.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+    app.kubernetes.io/name: mariadb
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      protocol: TCP
+      appProtocol: mysql
+{{- end }}

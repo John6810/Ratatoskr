@@ -1,0 +1,109 @@
+{{- if .Values.redis.enabled }}
+{{- $fullName := include "ratatoskr.redis.fullname" . -}}
+{{- $component := "cache" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: redis
+spec:
+  serviceName: {{ $fullName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        app.kubernetes.io/name: redis
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- toYaml .Values.redis.podSecurityContext | nindent 8 }}
+      containers:
+        - name: redis
+          image: {{ include "ratatoskr.image" (dict "image" .Values.redis.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy | default "IfNotPresent" }}
+          # REDIS_PASSWORD is interpolated into argv at pod start;
+          # visible via `kubectl exec ... -- ps`. Same posture as Compose.
+          # Hardening via Redis ACL files is a v0.7+ concern.
+          command:
+            - redis-server
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --appendonly
+            - "yes"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ratatoskr.redis.secretName" . | quote }}
+                  key: {{ include "ratatoskr.redis.passwordKey" . | quote }}
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Probes use sh -c so $REDIS_PASSWORD expands at exec time;
+          # exec.command does not honour Kubernetes' $(VAR) substitution.
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  {{- if .Values.redis.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "ratatoskr.labels" . | nindent 10 }}
+          app.kubernetes.io/component: cache
+          app.kubernetes.io/name: redis
+      spec:
+        accessModes:
+          - {{ .Values.redis.persistence.accessMode | quote }}
+        {{- $sc := include "ratatoskr.storageClass" (dict "scoped" .Values.redis.persistence.storageClass "global" .Values.global.storageClass) }}
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.persistence.size | quote }}
+  {{- end }}
+{{- end }}

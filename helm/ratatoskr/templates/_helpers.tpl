@@ -45,6 +45,11 @@ Chart label value: <name>-<version>, sanitized to DNS-1123.
 
 {{/*
 Common labels applied to every resource.
+NOTE: `app.kubernetes.io/name` is intentionally NOT included here —
+each component template sets it to the component name (`mariadb`,
+`redis`, `meilisearch`, `unit3d-app`, etc.) per the Kustomize base
+convention. Putting it in the shared helper would conflict with
+per-component overrides and produce duplicate keys.
 */}}
 {{- define "ratatoskr.labels" -}}
 helm.sh/chart: {{ include "ratatoskr.chart" . }}
@@ -60,9 +65,11 @@ ratatoskr.io/version: {{ .Chart.Version | quote }}
 {{/*
 Selector labels (subset of common labels — must NOT change between
 chart versions, K8s rejects label-selector mutations on Deployments).
+Kept narrow on purpose: only `app.kubernetes.io/instance` (release
+identity). Per-component templates add `app.kubernetes.io/name:
+<component>` to disambiguate workloads within the release.
 */}}
 {{- define "ratatoskr.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "ratatoskr.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
@@ -123,5 +130,111 @@ unit3d image reference. Falls back to .Chart.AppVersion when tag is empty.
 {{- printf "%s/%s:%s" $registry $repository $tag -}}
 {{- else -}}
 {{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Generic image reference helper. Pass a component values block; honors
+global.imageRegistry override.
+Usage: {{ include "ratatoskr.image" (dict "image" .Values.mariadb.image "global" .Values.global) }}
+*/}}
+{{- define "ratatoskr.image" -}}
+{{- $registry := .image.registry | default .global.imageRegistry -}}
+{{- $repository := .image.repository -}}
+{{- $tag := .image.tag -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+StorageClass resolver — per-component override falls through to
+global.storageClass, then to the cluster default ("" omitted from
+PVC spec).
+Usage: {{ include "ratatoskr.storageClass" (dict "scoped" .Values.mariadb.persistence.storageClass "global" .Values.global.storageClass) }}
+*/}}
+{{- define "ratatoskr.storageClass" -}}
+{{- if .scoped -}}
+{{- .scoped -}}
+{{- else if .global -}}
+{{- .global -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+==============================================================================
+Secret resolution helpers (existingSecret pattern, Bitnami-aligned).
+==============================================================================
+Each component has 2-3 helpers:
+  ratatoskr.<comp>.secretName   — Secret name (existingSecret OR chart-created)
+  ratatoskr.<comp>.<key>Key      — key name inside that Secret per password type
+*/}}
+
+{{/* MariaDB */}}
+{{- define "ratatoskr.mariadb.secretName" -}}
+{{- if .Values.mariadb.auth.existingSecret -}}
+{{- .Values.mariadb.auth.existingSecret -}}
+{{- else -}}
+{{- include "ratatoskr.mariadb.fullname" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.mariadb.rootPasswordKey" -}}
+{{- if .Values.mariadb.auth.existingSecret -}}
+{{- .Values.mariadb.auth.existingSecretRootPasswordKey -}}
+{{- else -}}
+MARIADB_ROOT_PASSWORD
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.mariadb.passwordKey" -}}
+{{- if .Values.mariadb.auth.existingSecret -}}
+{{- .Values.mariadb.auth.existingSecretPasswordKey -}}
+{{- else -}}
+DB_PASSWORD
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.mariadb.backupPasswordKey" -}}
+{{- if .Values.mariadb.auth.existingSecret -}}
+{{- .Values.mariadb.auth.existingSecretBackupPasswordKey -}}
+{{- else -}}
+MARIADB_BACKUP_PASSWORD
+{{- end -}}
+{{- end -}}
+
+{{/* Redis */}}
+{{- define "ratatoskr.redis.secretName" -}}
+{{- if .Values.redis.auth.existingSecret -}}
+{{- .Values.redis.auth.existingSecret -}}
+{{- else -}}
+{{- include "ratatoskr.redis.fullname" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.redis.passwordKey" -}}
+{{- if .Values.redis.auth.existingSecret -}}
+{{- .Values.redis.auth.existingSecretPasswordKey -}}
+{{- else -}}
+REDIS_PASSWORD
+{{- end -}}
+{{- end -}}
+
+{{/* MeiliSearch */}}
+{{- define "ratatoskr.meilisearch.secretName" -}}
+{{- if .Values.meilisearch.existingSecret -}}
+{{- .Values.meilisearch.existingSecret -}}
+{{- else -}}
+{{- include "ratatoskr.meilisearch.fullname" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.meilisearch.masterKeyKey" -}}
+{{- if .Values.meilisearch.existingSecret -}}
+{{- .Values.meilisearch.existingSecretMasterKeyKey -}}
+{{- else -}}
+MEILI_MASTER_KEY
 {{- end -}}
 {{- end -}}

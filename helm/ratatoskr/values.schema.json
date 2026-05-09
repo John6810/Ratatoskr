@@ -150,25 +150,43 @@
         "auth": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["rootPassword", "database", "username", "password"],
+          "required": ["database", "username"],
           "properties": {
-            "rootPassword": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Required. MariaDB root password."
-            },
+            "rootPassword": { "type": "string" },
             "database": { "type": "string", "minLength": 1 },
             "username": { "type": "string", "minLength": 1 },
-            "password": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Required. MariaDB application user password."
+            "password": { "type": "string" },
+            "backupPassword": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "existingSecretRootPasswordKey": { "type": "string", "minLength": 1 },
+            "existingSecretPasswordKey": { "type": "string", "minLength": 1 },
+            "existingSecretBackupPasswordKey": { "type": "string", "minLength": 1 }
+          },
+          "oneOf": [
+            {
+              "description": "Inline credentials path: rootPassword + password set, existingSecret empty.",
+              "properties": {
+                "rootPassword": { "type": "string", "minLength": 1 },
+                "password": { "type": "string", "minLength": 1 },
+                "existingSecret": { "type": "string", "maxLength": 0 }
+              },
+              "required": ["rootPassword", "password"]
+            },
+            {
+              "description": "External Secret path: existingSecret set, inline passwords empty.",
+              "properties": {
+                "rootPassword": { "type": "string", "maxLength": 0 },
+                "password": { "type": "string", "maxLength": 0 },
+                "existingSecret": { "type": "string", "minLength": 1 }
+              },
+              "required": ["existingSecret"]
             }
-          }
+          ]
         },
         "persistence": { "$ref": "#/definitions/persistence" },
         "resources": { "$ref": "#/definitions/resources" },
-        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" }
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 }
       }
     },
     "redis": {
@@ -181,35 +199,71 @@
         "auth": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["password"],
           "properties": {
-            "password": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Required. Redis AUTH password."
+            "password": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "existingSecretPasswordKey": { "type": "string", "minLength": 1 }
+          },
+          "oneOf": [
+            {
+              "description": "Inline credentials path: password set, existingSecret empty.",
+              "properties": {
+                "password": { "type": "string", "minLength": 1 },
+                "existingSecret": { "type": "string", "maxLength": 0 }
+              },
+              "required": ["password"]
+            },
+            {
+              "description": "External Secret path: existingSecret set, inline password empty.",
+              "properties": {
+                "password": { "type": "string", "maxLength": 0 },
+                "existingSecret": { "type": "string", "minLength": 1 }
+              },
+              "required": ["existingSecret"]
             }
-          }
+          ]
         },
         "persistence": { "$ref": "#/definitions/persistence" },
-        "resources": { "$ref": "#/definitions/resources" }
+        "resources": { "$ref": "#/definitions/resources" },
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" }
       }
     },
     "meilisearch": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["masterKey"],
       "properties": {
         "enabled": { "type": "boolean" },
         "image": { "$ref": "#/definitions/image" },
-        "masterKey": {
+        "masterKey": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "existingSecretMasterKeyKey": { "type": "string", "minLength": 1 },
+        "env": {
           "type": "string",
-          "minLength": 16,
-          "description": "Required. MeiliSearch master key (16+ bytes)."
+          "enum": ["production", "development"]
         },
         "persistence": { "$ref": "#/definitions/persistence" },
         "experimentalMetrics": { "type": "boolean" },
-        "resources": { "$ref": "#/definitions/resources" }
-      }
+        "resources": { "$ref": "#/definitions/resources" },
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" }
+      },
+      "oneOf": [
+        {
+          "description": "Inline master key path: masterKey set (16+ bytes), existingSecret empty.",
+          "properties": {
+            "masterKey": { "type": "string", "minLength": 16 },
+            "existingSecret": { "type": "string", "maxLength": 0 }
+          },
+          "required": ["masterKey"]
+        },
+        {
+          "description": "External Secret path: existingSecret set, inline masterKey empty.",
+          "properties": {
+            "masterKey": { "type": "string", "maxLength": 0 },
+            "existingSecret": { "type": "string", "minLength": 1 }
+          },
+          "required": ["existingSecret"]
+        }
+      ]
     },
     "storage": {
       "type": "object",

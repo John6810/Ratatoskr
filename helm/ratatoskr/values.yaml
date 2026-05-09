@@ -7,14 +7,21 @@
 #
 # Required values (operator MUST set, schema-enforced):
 #   unit3d.appKey
-#   mariadb.auth.rootPassword
-#   mariadb.auth.password
-#   redis.auth.password
-#   meilisearch.masterKey
+#   mariadb.auth.rootPassword     (or mariadb.auth.existingSecret)
+#   mariadb.auth.password         (or mariadb.auth.existingSecret)
+#   redis.auth.password           (or redis.auth.existingSecret)
+#   meilisearch.masterKey         (or meilisearch.existingSecret)
 #
-# Templates land in v0.5.0-beta.1. At v0.5.0-alpha.1 this file
-# documents the schema; helm install produces no Kubernetes resources
-# until templates ship.
+# Bootstrapped Secrets are SET ONCE per release. Chart-created Secrets
+# carry helm.sh/hook=pre-install,pre-upgrade and helm.sh/resource-policy=keep
+# so they survive `helm uninstall` (their values authenticate the running
+# DB; deleting them would break it). Consequence: changing a password
+# value in this file and running `helm upgrade` does NOT propagate the
+# new value — the existing Secret is kept intact. Rotation procedure:
+# `kubectl delete secret <release>-<component>` first, THEN `helm upgrade`,
+# THEN restart the dependent workloads. Operators on sealed-secrets / ESO
+# (existingSecret pattern) bypass this — Secret rotation flows through
+# their KMS / sealing pipeline.
 
 # ---- global ---------------------------------------------------------------
 global:
@@ -164,7 +171,11 @@ mariadb:
     pullPolicy: IfNotPresent
 
   auth:
-    # REQUIRED. MariaDB root user password.
+    # Inline credentials — chart creates a Secret named after the
+    # release. Set these OR use existingSecret below (mutually
+    # exclusive — schema enforces oneOf).
+    #
+    # MARIADB_ROOT_PASSWORD: PERMANENT admin credential per ADR-0004.
     rootPassword: ""
 
     # Application database name (UNIT3D's DB_DATABASE).
@@ -173,8 +184,25 @@ mariadb:
     # Application database user (UNIT3D's DB_USERNAME).
     username: "unit3d"
 
-    # REQUIRED. Application user password (UNIT3D's DB_PASSWORD).
+    # Application user password (UNIT3D's DB_PASSWORD).
     password: ""
+
+    # Optional backup user password (consumed by the v0.2 backup
+    # pipeline — separate workload, not the StatefulSet). Empty
+    # leaves it unset.
+    backupPassword: ""
+
+    # External Secret path: operator-supplied Secret holding the
+    # passwords (sealed-secrets / ESO / vanilla). When set, the chart
+    # does NOT create a Secret; rootPassword + password + backupPassword
+    # above are ignored.
+    existingSecret: ""
+    # Keys inside the existing Secret. Defaults match the Kustomize
+    # base secret-template key names so existing operators can point
+    # at their kustomize-side sealed-secret without renaming keys.
+    existingSecretRootPasswordKey: "MARIADB_ROOT_PASSWORD"
+    existingSecretPasswordKey: "DB_PASSWORD"
+    existingSecretBackupPasswordKey: "MARIADB_BACKUP_PASSWORD"
 
   persistence:
     enabled: true
@@ -198,6 +226,10 @@ mariadb:
     runAsGroup: 999
     fsGroup: 999
 
+  # Pod-level termination grace. MariaDB writes to its data dir during
+  # InnoDB recovery on every boot; 60s is generous but bounded.
+  terminationGracePeriodSeconds: 60
+
 # ---- redis ---------------------------------------------------------------
 redis:
   # Set false to use an external Redis. Cache + queue + broadcast all
@@ -211,8 +243,16 @@ redis:
     pullPolicy: IfNotPresent
 
   auth:
-    # REQUIRED. Redis AUTH password (used by UNIT3D + queue + scheduler).
+    # Inline (default): chart creates a Secret holding REDIS_PASSWORD.
+    # Set this OR existingSecret below (mutually exclusive).
     password: ""
+
+    # External Secret path: operator-supplied Secret. When set, the
+    # chart does NOT create one and the inline password is ignored.
+    existingSecret: ""
+    # Key inside the existing Secret. Default matches the Kustomize
+    # base secret-template key (REDIS_PASSWORD).
+    existingSecretPasswordKey: "REDIS_PASSWORD"
 
   persistence:
     enabled: true
@@ -228,6 +268,13 @@ redis:
       cpu: 200m
       memory: 512Mi
 
+  # Redis runs as UID/GID 999 in the upstream alpine image.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+
 # ---- meilisearch ---------------------------------------------------------
 meilisearch:
   enabled: true
@@ -238,9 +285,23 @@ meilisearch:
     tag: "v1.43"
     pullPolicy: IfNotPresent
 
-  # REQUIRED. MeiliSearch master key (16+ bytes). Used as Bearer token
-  # for /metrics in production mode and for index management.
+  # Inline (default): chart creates a Secret holding MEILI_MASTER_KEY.
+  # Set this OR existingSecret below (mutually exclusive — schema
+  # enforces oneOf). Master key must be 16+ bytes per upstream
+  # constraint when MEILI_ENV=production.
   masterKey: ""
+
+  # External Secret path: operator-supplied Secret. When set, the
+  # chart does NOT create one and the inline masterKey is ignored.
+  existingSecret: ""
+  # Key inside the existing Secret. Default matches the Kustomize
+  # base secret-template key (MEILI_MASTER_KEY).
+  existingSecretMasterKeyKey: "MEILI_MASTER_KEY"
+
+  # MEILI_ENV: production (default; enforces master key length) or
+  # development (relaxes some upstream guards). Never use development
+  # in production — it disables auth on some endpoints.
+  env: "production"
 
   persistence:
     enabled: true
@@ -260,6 +321,15 @@ meilisearch:
     limits:
       cpu: 500m
       memory: 1Gi
+
+  # MeiliSearch upstream image runs as root by default; ratatoskr
+  # picks UID/GID 65532 (distroless / Chainguard / Wolfi convention).
+  # See kustomize/base/meilisearch/statefulset.yaml for rationale.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
 
 # ---- storage (unit3d-storage PVC for the 14 PVC-bound disks per ADR-0002)
 storage:

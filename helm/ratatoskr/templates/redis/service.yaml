@@ -1,0 +1,22 @@
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ratatoskr.redis.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/name: redis
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ratatoskr.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+      appProtocol: redis
+{{- end }}

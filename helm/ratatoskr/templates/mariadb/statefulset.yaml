@@ -1,0 +1,125 @@
+{{- if .Values.mariadb.enabled }}
+{{- $fullName := include "ratatoskr.mariadb.fullname" . -}}
+{{- $component := "database" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: mariadb
+spec:
+  serviceName: {{ $fullName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/name: mariadb
+  template:
+    metadata:
+      labels:
+        {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        app.kubernetes.io/name: mariadb
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.mariadb.terminationGracePeriodSeconds | default 60 }}
+      securityContext:
+        {{- toYaml .Values.mariadb.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mariadb
+          image: {{ include "ratatoskr.image" (dict "image" .Values.mariadb.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy | default "IfNotPresent" }}
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ratatoskr.mariadb.secretName" . | quote }}
+                  key: {{ include "ratatoskr.mariadb.rootPasswordKey" . | quote }}
+            - name: MARIADB_DATABASE
+              value: {{ .Values.mariadb.auth.database | quote }}
+            - name: MARIADB_USER
+              value: {{ .Values.mariadb.auth.username | quote }}
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ratatoskr.mariadb.secretName" . | quote }}
+                  key: {{ include "ratatoskr.mariadb.passwordKey" . | quote }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.mariadb.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            # readOnlyRootFilesystem requires emptyDir mounts for paths
+            # mysqld writes to outside the data dir.
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /run/mysqld
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+  {{- if .Values.mariadb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "ratatoskr.labels" . | nindent 10 }}
+          app.kubernetes.io/component: database
+          app.kubernetes.io/name: mariadb
+      spec:
+        accessModes:
+          - {{ .Values.mariadb.persistence.accessMode | quote }}
+        {{- $sc := include "ratatoskr.storageClass" (dict "scoped" .Values.mariadb.persistence.storageClass "global" .Values.global.storageClass) }}
+        {{- if $sc }}
+        storageClassName: {{ $sc | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mariadb.persistence.size | quote }}
+  {{- end }}
+{{- end }}

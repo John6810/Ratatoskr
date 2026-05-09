@@ -1,0 +1,22 @@
+{{- if .Values.meilisearch.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ratatoskr.meilisearch.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: search
+    app.kubernetes.io/name: meilisearch
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ratatoskr.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: search
+    app.kubernetes.io/name: meilisearch
+  ports:
+    - name: http
+      port: 7700
+      targetPort: http
+      protocol: TCP
+      appProtocol: http
+{{- end }}
