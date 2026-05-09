@@ -3,6 +3,8 @@
 > The messenger of Yggdrasil — Production-grade Kubernetes deployment for UNIT3D.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Latest release](https://img.shields.io/github/v/release/John6810/Ratatoskr?logo=github&label=release)](https://github.com/John6810/Ratatoskr/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/John6810/Ratatoskr/docker-build.yml?branch=main&logo=githubactions&label=CI)](https://github.com/John6810/Ratatoskr/actions/workflows/docker-build.yml)
 [![UNIT3D](https://img.shields.io/badge/UNIT3D-v9.2.0-f46d5f.svg)](https://github.com/HDInnovations/UNIT3D)
 [![PHP](https://img.shields.io/badge/PHP-8.4-777BB4.svg)](https://www.php.net/)
 [![Laravel](https://img.shields.io/badge/Laravel-12-f4645f.svg)](https://laravel.com/)
@@ -25,25 +27,39 @@ A modern, opinionated deployment stack for [UNIT3D Community Edition](https://gi
 
 ## 🚀 Quick start
 
+Spin up the full UNIT3D stack locally with Docker Compose:
+
 ```bash
-git clone https://github.com/John6810/ratatoskr.git
-cd ratatoskr/compose
+# 1. Clone
+git clone https://github.com/John6810/Ratatoskr.git
+cd Ratatoskr/compose
+
+# 2. Configure — copy .env.example and replace EVERY CHANGEME value
 cp .env.example .env
-docker compose up -d
+# Open .env in your editor; replace every CHANGEME value before continuing.
+
+# 3. Build and start (--build compiles the FrankenPHP image on first run)
+docker compose up -d --build
+
+# 4. Open the tracker
+# http://localhost:8080  (UNIT3D_PORT in .env)
 ```
 
-Then open `http://localhost` and log in with the bootstrap owner credentials defined in your `.env`.
+The bootstrap admin account comes from `DEFAULT_OWNER_NAME`,
+`DEFAULT_OWNER_EMAIL`, and `DEFAULT_OWNER_PASSWORD` in `.env` — those
+values are seeded into the database on the first migration run.
 
 ---
 
-## 📚 Deployment levels
+## 🏗️ Deployment levels
 
-| Level | Use case | Status |
+| Level | Status | Audience |
 |---|---|---|
-| **1. Docker Compose** | Local test, small self-host on a single VPS | 🚧 WIP |
-| **2. Kustomize / K3s** | Single-node Kubernetes on a beefy VPS | 📋 Planned |
-| **3. Helm + ArgoCD** | Multi-node production with GitOps | 📋 Planned |
-| **4. Terraform** | Full IaC bootstrap (Hetzner, DigitalOcean, …) | 📋 Planned |
+| **1. Docker Compose** | ✅ v0.1.0 (2026-05-04) | Single-host, quick start |
+| **2. K3s mono-node** | ✅ v0.3.0 — `kustomize/overlays/dev` | Single VPS with K8s |
+| **3. Kubernetes production** | ✅ v0.3.0 — `overlays/prod-rwo`, `prod-rwx`, ArgoCD `ApplicationSet` | Multi-node, GitOps |
+| **4. Helm chart** | 📋 v0.5.0 (planned) | Helm-native operators |
+| **5. Terraform IaC** | 📋 v0.9.0 (planned) | Multi-provider VPS bootstrap |
 
 Each level has its own guide in [`docs/`](./docs).
 
@@ -57,6 +73,20 @@ Each level has its own guide in [`docs/`](./docs).
 | Database | MariaDB 11 |
 | Cache & queues | Redis 7 |
 | Search | MeiliSearch v1.43 |
+
+---
+
+## 📚 Documentation
+
+Operator-facing docs cover deployment, upgrade, security, and observability:
+
+- [📐 Architecture](docs/architecture.md) — Component graph, storage strategy, request flow (3 Mermaid diagrams)
+- [🚀 Upgrade guide](docs/upgrade-guide.md) — Migration paths (Compose → K8s, prod-rwo → prod-rwx, UNIT3D version bumps)
+- [🔒 Security hardening](docs/security-hardening.md) — Production hardening recipes (NetworkPolicy, secrets, TLS, container, DB)
+- [📊 Monitoring](docs/monitoring.md) — Observability baseline (Prometheus + Grafana + Loki + Alloy)
+- [⚡ Multi-queue scaling](docs/multi-queue-scaling.md) — KEDA multi-lane pattern (when single-queue is not enough)
+
+Architecture decisions are recorded as ADRs under [`docs/adr/`](docs/adr/) (5 Accepted at v0.4.0).
 
 ---
 
@@ -76,7 +106,7 @@ The full version-by-version roadmap with scale envelopes is in [docs/ROADMAP.md]
 
 ## 🤝 Contributing
 
-PRs welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) (coming soon).
+Issues and pull requests welcome. Contribution guidelines will land alongside v0.5.0; until then, follow the existing commit style ([Conventional Commits](https://www.conventionalcommits.org/)) and the conventions visible in the repository.
 
 ---
 
