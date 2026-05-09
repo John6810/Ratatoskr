@@ -1,0 +1,357 @@
+# Default values for ratatoskr.
+#
+# Schema mirrors the Kustomize values.env conventions so operators
+# migrating Kustomize -> Helm have a 1:1 value mapping. Defaults track
+# kustomize/base/ field values as the source of truth — when in doubt,
+# the Kustomize manifest wins.
+#
+# Required values (operator MUST set, schema-enforced):
+#   unit3d.appKey
+#   mariadb.auth.rootPassword
+#   mariadb.auth.password
+#   redis.auth.password
+#   meilisearch.masterKey
+#
+# Templates land in v0.5.0-beta.1. At v0.5.0-alpha.1 this file
+# documents the schema; helm install produces no Kubernetes resources
+# until templates ship.
+
+# ---- global ---------------------------------------------------------------
+global:
+  # Image registry override applied to every component (unit3d, mariadb,
+  # redis, meilisearch). Empty string means use each image's repo as-is.
+  imageRegistry: ""
+
+  # Image pull secrets attached to all Pod specs. Operators on private
+  # registries reference a secret here.
+  imagePullSecrets: []
+  # - name: ghcr-pull-secret
+
+  # Default StorageClass for every PVC the chart provisions. Empty
+  # string falls back to the cluster's default StorageClass annotation.
+  # Per-component overrides take precedence (mariadb.persistence.storageClass,
+  # meilisearch.persistence.storageClass, storage.storageClass).
+  storageClass: ""
+
+# ---- unit3d (the application) --------------------------------------------
+unit3d:
+  image:
+    registry: ghcr.io
+    repository: john6810/unit3d
+    # tag defaults to .Chart.AppVersion when empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # Operator must set REQUIRED. Generated once with `php artisan key:generate`
+  # or `openssl rand -base64 32` prefixed with "base64:".
+  # Do NOT regenerate post-deploy: see ADR-0004 for the encrypted-column
+  # corruption gotcha.
+  appKey: ""
+
+  # Public URL operators reach the tracker on. Used by Laravel for
+  # absolute URL generation (emails, signed routes, RSS feeds).
+  appUrl: "https://tracker.example.org"
+
+  # APP_ENV (production by default; "local" enables Laravel debug
+  # behaviors — never in production).
+  appEnv: "production"
+
+  # APP_DEBUG (false in production; true leaks stack traces to clients).
+  appDebug: false
+
+  # Laravel log channel verbosity (debug | info | notice | warning |
+  # error | critical | alert | emergency).
+  logLevel: "info"
+
+  # CIDRs trusted to forward X-Forwarded-For (per security-hardening.md
+  # § "Network: trusted proxies"). Default covers RFC1918 + RFC4193 +
+  # IPv6 link-local; tighten to your ingress controller's pod CIDR in
+  # production.
+  trustedProxies: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,fe80::/10"
+
+  # Replica count. v0.3 prod-rwo runs replicas=1; prod-rwx scales to
+  # >=2. Helm chart leaves it at 1 by default — operators bump in
+  # values overrides per environment.
+  replicas: 1
+
+  # Resources mirror kustomize/base/unit3d-app/deployment.yaml.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+  # Pod security context. UID/GID 33 = www-data on the FrankenPHP
+  # Debian-based image. fsGroup 33 makes mounted PVCs writable.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 33
+    runAsGroup: 33
+    fsGroup: 33
+
+  # Container security context (ratatoskr base hardening).
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # Liveness / readiness / startup probes. Empty maps mean the
+  # template uses sensible defaults (HTTP GET / on container port).
+  probes:
+    liveness: {}
+    readiness: {}
+    startup: {}
+
+# ---- queue worker --------------------------------------------------------
+queue:
+  enabled: true
+
+  # Queue worker replica count. Single replica fine for low-traffic
+  # trackers; KEDA scaler in v0.3 prod-rwx is operator-side opt-in.
+  replicas: 1
+
+  # Resources mirror kustomize/base/unit3d-queue/deployment.yaml.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ---- scheduler -----------------------------------------------------------
+scheduler:
+  enabled: true
+
+  # The scheduler is hard-capped at one replica per ADR-0005 — multiple
+  # schedulers fire each cron entry multiple times. No replicas knob.
+
+  # Resources mirror kustomize/base/unit3d-scheduler/deployment.yaml.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ---- migrate (one-shot Job) ----------------------------------------------
+migrate:
+  # Set false only if running migrations out-of-band (e.g. a separate
+  # CI/CD step). Disabling without an alternative path leaves the
+  # database unmigrated.
+  enabled: true
+
+  # Number of pod-level retries before the Job is marked Failed.
+  # Mirrors kustomize/base/unit3d-migrate/job.yaml.
+  backoffLimit: 3
+
+# ---- mariadb -------------------------------------------------------------
+mariadb:
+  # Set false to use an external MariaDB (RDS, Aiven, OVH managed).
+  # External wiring not yet covered at v0.5.0-alpha.1 — see ADR-0001
+  # for the planned managed-DB toggle.
+  enabled: true
+
+  image:
+    registry: ""
+    repository: mariadb
+    tag: "11"
+    pullPolicy: IfNotPresent
+
+  auth:
+    # REQUIRED. MariaDB root user password.
+    rootPassword: ""
+
+    # Application database name (UNIT3D's DB_DATABASE).
+    database: "unit3d"
+
+    # Application database user (UNIT3D's DB_USERNAME).
+    username: "unit3d"
+
+    # REQUIRED. Application user password (UNIT3D's DB_PASSWORD).
+    password: ""
+
+  persistence:
+    enabled: true
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    # Empty falls back to global.storageClass, then cluster default.
+    storageClass: ""
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+  # MariaDB runs as UID/GID 999 in the upstream Docker Hub image.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+
+# ---- redis ---------------------------------------------------------------
+redis:
+  # Set false to use an external Redis. Cache + queue + broadcast all
+  # depend on Redis — disable at your peril.
+  enabled: true
+
+  image:
+    registry: ""
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+
+  auth:
+    # REQUIRED. Redis AUTH password (used by UNIT3D + queue + scheduler).
+    password: ""
+
+  persistence:
+    enabled: true
+    accessMode: ReadWriteOnce
+    size: 1Gi
+    storageClass: ""
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+
+# ---- meilisearch ---------------------------------------------------------
+meilisearch:
+  enabled: true
+
+  image:
+    registry: ""
+    repository: getmeili/meilisearch
+    tag: "v1.43"
+    pullPolicy: IfNotPresent
+
+  # REQUIRED. MeiliSearch master key (16+ bytes). Used as Bearer token
+  # for /metrics in production mode and for index management.
+  masterKey: ""
+
+  persistence:
+    enabled: true
+    accessMode: ReadWriteOnce
+    size: 5Gi
+    storageClass: ""
+
+  # MEILI_EXPERIMENTAL_ENABLE_METRICS=true gates the /metrics endpoint.
+  # Per docs/monitoring.md: experimental flag, may break across versions.
+  # Off by default; opt in per environment.
+  experimentalMetrics: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+# ---- storage (unit3d-storage PVC for the 14 PVC-bound disks per ADR-0002)
+storage:
+  enabled: true
+
+  # ReadWriteOnce for prod-rwo (single-replica) topology.
+  # ReadWriteMany for prod-rwx (multi-replica) topology — your
+  # StorageClass provisioner must support RWX.
+  accessMode: ReadWriteOnce
+
+  size: 5Gi
+
+  # Empty falls back to global.storageClass, then cluster default.
+  storageClass: ""
+
+# ---- ingress -------------------------------------------------------------
+ingress:
+  # Off by default. Operators wire ingress per their cluster's controller.
+  enabled: false
+
+  # mode: traefik (Traefik IngressRoute CRD per kustomize ingress-traefik
+  # Component). gateway-api (HTTPRoute / Gateway / ReferenceGrant) lands
+  # in v0.5.0-beta.X alongside ADR-0006. Set to "none" to deploy without
+  # ingress (operator wires it externally).
+  mode: traefik
+
+  # className for vanilla Ingress / IngressClass (mode: traefik uses
+  # this when constructing the IngressRoute matchExpression).
+  className: ""
+
+  # Hostnames the ingress responds to. First entry is the canonical host.
+  hosts:
+    - tracker.example.org
+
+  # TLS configuration. cert-manager Certificate is generated when
+  # tls.enabled=true and tls.certManager.enabled=true.
+  tls:
+    enabled: true
+    certManager:
+      enabled: true
+      issuerRef:
+        # ClusterIssuer or Issuer kind, created out-of-band by the
+        # operator (ratatoskr does not ship one as part of the chart;
+        # see kustomize/components/ingress-traefik for a reference).
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+
+# ---- networkPolicies -----------------------------------------------------
+networkPolicies:
+  # default-deny + named allows per kustomize/base/networkpolicies/.
+  # Required in prod; safe to leave on in dev.
+  enabled: true
+
+  # Namespace selector for ingress traffic (which namespaces are allowed
+  # to reach unit3d-app on port 80). Operators label their ingress
+  # namespace to match.
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-system
+
+# ---- serviceAccount ------------------------------------------------------
+serviceAccount:
+  # If true, create a ServiceAccount per workload. If false, every
+  # Pod runs as `default`.
+  create: true
+
+  # If empty, computed from ratatoskr.fullname + component suffix.
+  name: ""
+
+  annotations: {}
+  # Cloud IAM role bindings go here (eks.amazonaws.com/role-arn, etc.).
+
+# ---- pdb -----------------------------------------------------------------
+pdb:
+  # PodDisruptionBudget for unit3d-app and unit3d-queue. Off by
+  # default; turn on when running multi-replica (HA / prod-rwx
+  # topology). Single-replica + PDB minAvailable=1 is a deadlock —
+  # voluntary evictions hang forever.
+  enabled: false
+
+  # Applied to unit3d-app and unit3d-queue when enabled.
+  minAvailable: 1
+
+# ---- hpa -----------------------------------------------------------------
+hpa:
+  # HorizontalPodAutoscaler on unit3d-app. Off by default; on in
+  # multi-replica overlays (prod-rwx). Set unit3d.replicas to >= 2
+  # before enabling — minReplicas of 2 with replicas: 1 produces a
+  # mismatch warning at install time.
+  enabled: false
+
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80

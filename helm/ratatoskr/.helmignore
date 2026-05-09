@@ -1,0 +1,48 @@
+# Patterns to ignore when building packages.
+# https://helm.sh/docs/chart_template_guide/helm_ignore_file/
+
+# Helm defaults
+.DS_Store
+.git/
+.gitignore
+.bzr/
+.hg/
+.hgignore
+.svn/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+
+# Build artefacts
+*.tgz
+
+# CI / editor / IDE
+.idea/
+.vscode/
+.project
+.classpath
+.settings/
+.devcontainer/
+
+# CI test fixtures — kept inside the chart for `helm lint -f` against
+# the strict schema, but excluded from packaged tarballs.
+ci/
+
+# ratatoskr-specific — sibling directories that are NOT chart content.
+# Without these, `helm package` would walk up and include the entire
+# repo. The build context for the chart is helm/ratatoskr/ alone.
+docs/
+kustomize/
+compose/
+scripts/
+argocd/
+docker/
+.github/
+.claude/
+CHANGELOG.md
+README.md
+DISCLAIMER.md
+LICENSE
+THIRD_PARTY_LICENSES.md

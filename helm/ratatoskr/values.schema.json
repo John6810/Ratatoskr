@@ -1,0 +1,306 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ratatoskr Helm chart values",
+  "description": "Schema for ratatoskr v0.5.0-alpha.1 — production deployment stack for UNIT3D Community Edition.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["unit3d", "mariadb", "redis", "meilisearch"],
+  "definitions": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registry": { "type": "string" },
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      },
+      "required": ["repository"]
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": ["string", "number"] },
+            "memory": { "type": "string" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": ["string", "number"] },
+            "memory": { "type": "string" }
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"]
+        },
+        "size": { "type": "string", "minLength": 1 },
+        "storageClass": { "type": "string" }
+      },
+      "required": ["enabled"]
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "runAsNonRoot": { "type": "boolean" },
+        "runAsUser": { "type": "integer", "minimum": 0 },
+        "runAsGroup": { "type": "integer", "minimum": 0 },
+        "fsGroup": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "imageRegistry": { "type": "string" },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "minLength": 1 }
+            },
+            "required": ["name"]
+          }
+        },
+        "storageClass": { "type": "string" }
+      }
+    },
+    "unit3d": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["appKey"],
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "appKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required. Generate once via 'php artisan key:generate' or 'openssl rand -base64 32' prefixed with 'base64:'. Never regenerate (corrupts encrypted columns)."
+        },
+        "appUrl": { "type": "string", "format": "uri" },
+        "appEnv": {
+          "type": "string",
+          "enum": ["production", "local", "testing", "staging"]
+        },
+        "appDebug": { "type": "boolean" },
+        "logLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]
+        },
+        "trustedProxies": { "type": "string" },
+        "replicas": { "type": "integer", "minimum": 0 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+        "containerSecurityContext": { "type": "object", "additionalProperties": true },
+        "probes": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicas": { "type": "integer", "minimum": 0 },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "migrate": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "backoffLimit": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "mariadb": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["auth"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/image" },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rootPassword", "database", "username", "password"],
+          "properties": {
+            "rootPassword": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Required. MariaDB root password."
+            },
+            "database": { "type": "string", "minLength": 1 },
+            "username": { "type": "string", "minLength": 1 },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Required. MariaDB application user password."
+            }
+          }
+        },
+        "persistence": { "$ref": "#/definitions/persistence" },
+        "resources": { "$ref": "#/definitions/resources" },
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["auth"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/image" },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["password"],
+          "properties": {
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Required. Redis AUTH password."
+            }
+          }
+        },
+        "persistence": { "$ref": "#/definitions/persistence" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "meilisearch": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["masterKey"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/image" },
+        "masterKey": {
+          "type": "string",
+          "minLength": 16,
+          "description": "Required. MeiliSearch master key (16+ bytes)."
+        },
+        "persistence": { "$ref": "#/definitions/persistence" },
+        "experimentalMetrics": { "type": "boolean" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"]
+        },
+        "size": { "type": "string", "minLength": 1 },
+        "storageClass": { "type": "string" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "mode": {
+          "type": "string",
+          "enum": ["traefik", "gateway-api", "none"]
+        },
+        "className": { "type": "string" },
+        "hosts": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "certManager": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "issuerRef": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "kind"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["Issuer", "ClusterIssuer"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "networkPolicies": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressNamespaceSelector": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string"] }
+      }
+    },
+    "hpa": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    }
+  }
+}

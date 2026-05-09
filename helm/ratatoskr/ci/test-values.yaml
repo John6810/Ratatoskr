@@ -1,0 +1,17 @@
+# Placeholder values used by `helm lint` and CI smoke tests.
+# Satisfies the values.schema.json minLength constraints on required
+# fields without leaking real secrets. NOT for any environment —
+# every value here is a known placeholder.
+#
+# Excluded from `helm package` via .helmignore (ci/ is omitted).
+unit3d:
+  appKey: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+mariadb:
+  auth:
+    rootPassword: "test-root-password-not-real"
+    password: "test-app-password-not-real"
+redis:
+  auth:
+    password: "test-redis-password-not-real"
+meilisearch:
+  masterKey: "test-meili-key-16-bytes-minimum-not-real"
