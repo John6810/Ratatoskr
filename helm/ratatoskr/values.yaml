@@ -482,25 +482,113 @@ serviceAccount:
   # Cloud IAM role bindings go here (eks.amazonaws.com/role-arn, etc.).
 
 # ---- pdb -----------------------------------------------------------------
+# PodDisruptionBudgets, per-workload. Off by default. NEVER enable on
+# a single-replica workload — PDB minAvailable:1 on replicas:1 deadlocks
+# voluntary disruptions (drain blocks forever). NO PDB shipped for
+# unit3d-scheduler: ADR-0005 caps it at 1 replica.
+#
+# Each block enforces minAvailable XOR maxUnavailable via schema oneOf.
+# Set exactly one when enabled.
 pdb:
-  # PodDisruptionBudget for unit3d-app and unit3d-queue. Off by
-  # default; turn on when running multi-replica (HA / prod-rwx
-  # topology). Single-replica + PDB minAvailable=1 is a deadlock —
-  # voluntary evictions hang forever.
-  enabled: false
-
-  # Applied to unit3d-app and unit3d-queue when enabled.
-  minAvailable: 1
+  app:
+    enabled: false
+    minAvailable: 1
+    # maxUnavailable: 1   # mutually exclusive with minAvailable
+  queue:
+    enabled: false
+    minAvailable: 1
+    # maxUnavailable: 1
 
 # ---- hpa -----------------------------------------------------------------
+# HorizontalPodAutoscalers, per-workload. Off by default. Enable on
+# multi-replica overlays (prod-rwx-shaped). Defaults mirror
+# kustomize/overlays/prod-rwx/hpa/ verbatim — same behavior block on
+# app + queue keeps scaling intuition consistent across both workloads.
+#
+# ⚠️  STORAGE TOPOLOGY CONSTRAINT — the chart fails fast at template
+# time if hpa.<workload>.minReplicas > 1 is set while
+# storage.accessMode is ReadWriteOnce. A second pod cannot mount the
+# same RWO PVC on a different node; the result is a stuck
+# ContainerCreating in production. Three operator paths if you want
+# hpa.<workload>.minReplicas > 1:
+#   1. Flip storage.accessMode to ReadWriteMany (prod-rwx topology).
+#   2. Set storage.enabled=false (route ALL storage to S3 via
+#      unit3d.storage.*Files.driver=s3).
+#   3. Keep minReplicas: 1 (the chart still scales between 1 and
+#      maxReplicas; this just allows scale-to-1).
+#
+# Future KEDA Redis-list scaler port (kustomize/components/keda-queue-scaler
+# not yet in Helm) will introduce an HPA-vs-KEDA mutex on the queue
+# workload — only one autoscaler can drive the same Deployment.
 hpa:
-  # HorizontalPodAutoscaler on unit3d-app. Off by default; on in
-  # multi-replica overlays (prod-rwx). Set unit3d.replicas to >= 2
-  # before enabling — minReplicas of 2 with replicas: 1 produces a
-  # mismatch warning at install time.
-  enabled: false
-
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-  targetMemoryUtilizationPercentage: 80
+  app:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70
+      - type: Resource
+        resource:
+          name: memory
+          target:
+            type: Utilization
+            averageUtilization: 80
+    # Behavior block tuned for bursty-load resilience. Surface as raw
+    # YAML so operators can override without patching the chart.
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 30
+        selectPolicy: Max
+        policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 60
+          - type: Pods
+            value: 4
+            periodSeconds: 60
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        selectPolicy: Min
+        policies:
+          - type: Percent
+            value: 50
+            periodSeconds: 120
+  queue:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    # CPU-only — queue worker memory is bounded by queue:work
+    # --max-time=3600 cycling workers naturally; CPU is the binding
+    # throughput constraint.
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70
+    # Same behavior block as app — consistent scaling dynamics across
+    # the app/queue pair simplifies operator mental model.
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 30
+        selectPolicy: Max
+        policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 60
+          - type: Pods
+            value: 4
+            periodSeconds: 60
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        selectPolicy: Min
+        policies:
+          - type: Percent
+            value: 50
+            periodSeconds: 120

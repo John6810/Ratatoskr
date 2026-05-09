@@ -1,0 +1,36 @@
+{{- if .Values.hpa.queue.enabled }}
+{{- /*
+NOTE: when components/keda-queue-scaler is ported (v0.5.x or later),
+a schema-level mutex will gate HPA-vs-KEDA — only one autoscaler can
+drive the same Deployment. Two HPAs (or HPA + KEDA-managed HPA)
+targeting unit3d-queue cause oscillation per Kubernetes documented
+limitations.
+
+Same RWO/multi-replica incompatibility as hpa.app — see the fail
+guard below for the operator paths.
+*/}}
+{{- if and .Values.storage.enabled (eq .Values.storage.accessMode "ReadWriteOnce") (gt (int .Values.hpa.queue.minReplicas) 1) }}
+{{- fail "hpa.queue: minReplicas > 1 is incompatible with storage.accessMode=ReadWriteOnce — a second unit3d-queue pod cannot mount the same RWO PVC. Set storage.accessMode=ReadWriteMany (prod-rwx topology), or set storage.enabled=false (S3-routed), or keep hpa.queue.minReplicas=1." }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "ratatoskr.queue.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/name: unit3d-queue
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "ratatoskr.queue.fullname" . }}
+  minReplicas: {{ .Values.hpa.queue.minReplicas }}
+  maxReplicas: {{ .Values.hpa.queue.maxReplicas }}
+  metrics:
+    {{- toYaml .Values.hpa.queue.metrics | nindent 4 }}
+  {{- with .Values.hpa.queue.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

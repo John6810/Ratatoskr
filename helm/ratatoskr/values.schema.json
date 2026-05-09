@@ -65,6 +65,41 @@
         "runAsGroup": { "type": "integer", "minimum": 0 },
         "fsGroup": { "type": "integer", "minimum": 0 }
       }
+    },
+    "hpaBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "metrics": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "behavior": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "pdbBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string"] },
+        "maxUnavailable": { "type": ["integer", "string"] }
+      },
+      "oneOf": [
+        {
+          "description": "minAvailable set, maxUnavailable absent.",
+          "required": ["minAvailable"],
+          "not": { "required": ["maxUnavailable"] }
+        },
+        {
+          "description": "maxUnavailable set, minAvailable absent.",
+          "required": ["maxUnavailable"],
+          "not": { "required": ["minAvailable"] }
+        }
+      ]
     }
   },
   "properties": {
@@ -442,19 +477,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "minAvailable": { "type": ["integer", "string"] }
+        "app": { "$ref": "#/definitions/pdbBlock" },
+        "queue": { "$ref": "#/definitions/pdbBlock" }
       }
     },
     "hpa": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "minReplicas": { "type": "integer", "minimum": 1 },
-        "maxReplicas": { "type": "integer", "minimum": 1 },
-        "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "targetMemoryUtilizationPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+        "app": { "$ref": "#/definitions/hpaBlock" },
+        "queue": { "$ref": "#/definitions/hpaBlock" }
       }
     }
   }

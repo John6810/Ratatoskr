@@ -1,0 +1,30 @@
+{{- if .Values.pdb.app.enabled }}
+{{- /* Template-side guard: schema oneOf catches XOR, but render-time
+       fail with a clearer message when neither is set (or both, as
+       belt-and-suspenders). */}}
+{{- if and .Values.pdb.app.minAvailable .Values.pdb.app.maxUnavailable }}
+{{- fail "pdb.app: minAvailable and maxUnavailable are mutually exclusive — set exactly one." }}
+{{- end }}
+{{- if and (not .Values.pdb.app.minAvailable) (not .Values.pdb.app.maxUnavailable) }}
+{{- fail "pdb.app.enabled is true but neither minAvailable nor maxUnavailable is set — set exactly one." }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ratatoskr.unit3d.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+    app.kubernetes.io/name: unit3d-app
+spec:
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+      app.kubernetes.io/name: unit3d-app
+  {{- if .Values.pdb.app.minAvailable }}
+  minAvailable: {{ .Values.pdb.app.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .Values.pdb.app.maxUnavailable }}
+  {{- end }}
+{{- end }}

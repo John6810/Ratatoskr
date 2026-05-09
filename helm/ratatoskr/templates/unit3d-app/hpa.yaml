@@ -1,0 +1,33 @@
+{{- if .Values.hpa.app.enabled }}
+{{- /* RWO PVC + multi-replica is incompatible: a second pod cannot
+       mount the same RWO volume on a different node. Fail at template
+       time with a clear message rather than letting the operator hit
+       a ContainerCreating loop in production. Operator paths:
+         - flip storage.accessMode to ReadWriteMany (prod-rwx topology)
+         - move all storage to S3 (storage.enabled: false)
+         - keep hpa.app.minReplicas: 1 (effectively disables HA scale) */}}
+{{- if and .Values.storage.enabled (eq .Values.storage.accessMode "ReadWriteOnce") (gt (int .Values.hpa.app.minReplicas) 1) }}
+{{- fail "hpa.app: minReplicas > 1 is incompatible with storage.accessMode=ReadWriteOnce — a second unit3d-app pod cannot mount the same RWO PVC. Set storage.accessMode=ReadWriteMany (prod-rwx topology), or set storage.enabled=false (S3-routed), or keep hpa.app.minReplicas=1." }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "ratatoskr.unit3d.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+    app.kubernetes.io/name: unit3d-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "ratatoskr.unit3d.fullname" . }}
+  minReplicas: {{ .Values.hpa.app.minReplicas }}
+  maxReplicas: {{ .Values.hpa.app.maxReplicas }}
+  metrics:
+    {{- toYaml .Values.hpa.app.metrics | nindent 4 }}
+  {{- with .Values.hpa.app.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

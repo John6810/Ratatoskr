@@ -1,0 +1,27 @@
+{{- if .Values.pdb.queue.enabled }}
+{{- if and .Values.pdb.queue.minAvailable .Values.pdb.queue.maxUnavailable }}
+{{- fail "pdb.queue: minAvailable and maxUnavailable are mutually exclusive — set exactly one." }}
+{{- end }}
+{{- if and (not .Values.pdb.queue.minAvailable) (not .Values.pdb.queue.maxUnavailable) }}
+{{- fail "pdb.queue.enabled is true but neither minAvailable nor maxUnavailable is set — set exactly one." }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ratatoskr.queue.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/name: unit3d-queue
+spec:
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+      app.kubernetes.io/name: unit3d-queue
+  {{- if .Values.pdb.queue.minAvailable }}
+  minAvailable: {{ .Values.pdb.queue.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .Values.pdb.queue.maxUnavailable }}
+  {{- end }}
+{{- end }}
