@@ -1,0 +1,101 @@
+{{- if .Values.queue.enabled }}
+{{- $component := "worker" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ratatoskr.queue.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: unit3d-queue
+spec:
+  replicas: {{ .Values.queue.replicas | default 1 }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/name: unit3d-queue
+  template:
+    metadata:
+      labels:
+        {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        app.kubernetes.io/name: unit3d-queue
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/unit3d-app/configmap.yaml") . | sha256sum }}
+        checksum/filesystems: {{ include (print $.Template.BasePath "/unit3d-app/configmap-filesystems.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Long grace window for in-flight queue jobs. Paired with
+      # --max-time=3600 below — combined effect: a Deployment rollout
+      # waits for the current job batch to complete before SIGKILL.
+      terminationGracePeriodSeconds: 3600
+      securityContext:
+        {{- toYaml .Values.unit3d.podSecurityContext | nindent 8 }}
+      containers:
+        - name: unit3d-queue
+          image: {{ include "ratatoskr.unit3d.image" . | quote }}
+          imagePullPolicy: {{ .Values.unit3d.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - php
+            - /app/artisan
+            - queue:work
+            - --tries=3
+            - --max-time=3600
+            - --sleep=3
+          envFrom:
+            {{- include "ratatoskr.unit3d.envFrom" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.queue.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.unit3d.containerSecurityContext | nindent 12 }}
+          livenessProbe:
+            exec:
+              command:
+                - php
+                - /app/artisan
+                - --version
+            initialDelaySeconds: 15
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: filesystems-config
+              mountPath: /app/config/filesystems.php
+              subPath: filesystems.php
+              readOnly: true
+            {{- if .Values.storage.enabled }}
+            - name: storage
+              mountPath: /app/storage
+            {{- end }}
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: caddy-data
+              mountPath: /data/caddy
+            - name: caddy-config
+              mountPath: /config/caddy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: filesystems-config
+          configMap:
+            name: {{ include "ratatoskr.fullname" . }}-unit3d-filesystems-config
+        {{- if .Values.storage.enabled }}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "ratatoskr.fullname" . }}-unit3d-storage
+        {{- end }}
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

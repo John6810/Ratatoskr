@@ -238,3 +238,140 @@ REDIS_PASSWORD
 MEILI_MASTER_KEY
 {{- end -}}
 {{- end -}}
+
+{{/* unit3d application Secret (APP_KEY + bootstrap + DEFAULT_OWNER_*) */}}
+{{- define "ratatoskr.unit3d.secretName" -}}
+{{- if .Values.unit3d.existingSecret -}}
+{{- .Values.unit3d.existingSecret -}}
+{{- else -}}
+{{- include "ratatoskr.unit3d.fullname" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.unit3d.appKeyKey" -}}
+{{- if .Values.unit3d.existingSecret -}}
+{{- .Values.unit3d.existingSecretAppKeyKey -}}
+{{- else -}}
+APP_KEY
+{{- end -}}
+{{- end -}}
+
+{{/*
+unit3d-storage-secrets: optional, only created when ANY Storage-aware
+disk has driver: s3 AND unit3d.storage.s3.existingSecret is empty.
+Operators with all-local storage skip the Secret entirely.
+*/}}
+{{- define "ratatoskr.storage.secretName" -}}
+{{- if .Values.unit3d.storage.s3.existingSecret -}}
+{{- .Values.unit3d.storage.s3.existingSecret -}}
+{{- else -}}
+{{- printf "%s-unit3d-storage" (include "ratatoskr.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.storage.s3Enabled" -}}
+{{- if or (eq .Values.unit3d.storage.torrentFiles.driver "s3") (or (eq .Values.unit3d.storage.subtitleFiles.driver "s3") (eq .Values.unit3d.storage.attachmentFiles.driver "s3")) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+==============================================================================
+Hostname / port resolvers (chart-managed vs external endpoint).
+==============================================================================
+When mariadb.enabled (likewise redis, meilisearch), the chart-deployed
+Service is reachable at <release>-<component>:<port>. When false,
+operator supplies unit3d.<component>.host + .port (external endpoint).
+*/}}
+
+{{- define "ratatoskr.dbHost" -}}
+{{- if .Values.mariadb.enabled -}}
+{{- include "ratatoskr.mariadb.fullname" . -}}
+{{- else -}}
+{{- required "unit3d.database.host is required when mariadb.enabled is false" .Values.unit3d.database.host -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.dbPort" -}}
+{{- if .Values.mariadb.enabled -}}
+3306
+{{- else -}}
+{{- .Values.unit3d.database.port | default 3306 -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.redisHost" -}}
+{{- if .Values.redis.enabled -}}
+{{- include "ratatoskr.redis.fullname" . -}}
+{{- else -}}
+{{- required "unit3d.redis.host is required when redis.enabled is false" .Values.unit3d.redis.host -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.redisPort" -}}
+{{- if .Values.redis.enabled -}}
+6379
+{{- else -}}
+{{- .Values.unit3d.redis.port | default 6379 -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.meiliUrl" -}}
+{{- if .Values.meilisearch.enabled -}}
+{{- printf "http://%s:7700" (include "ratatoskr.meilisearch.fullname" .) -}}
+{{- else -}}
+{{- $host := required "unit3d.meilisearch.host is required when meilisearch.enabled is false" .Values.unit3d.meilisearch.host -}}
+{{- $port := .Values.unit3d.meilisearch.port | default 7700 -}}
+{{- printf "http://%s:%v" $host $port -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Bootstrap-app-key + existingSecret mutex guard. Fail rendering with a
+clear message if both are set — they are mutually exclusive (cannot
+generate APP_KEY into an operator-managed external Secret).
+*/}}
+{{- define "ratatoskr.unit3d.bootstrapGuard" -}}
+{{- if and .Values.unit3d.bootstrapAppKey .Values.unit3d.existingSecret -}}
+{{- fail "unit3d.bootstrapAppKey and unit3d.existingSecret are mutually exclusive: bootstrap cannot generate APP_KEY into an operator-managed external Secret." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Shared envFrom block for the four UNIT3D workloads (app, queue,
+scheduler, migrate). Renders configMapRef + 4 mandatory secretRefs
+(unit3d/db/redis/meili — chart-managed or operator-supplied per toggle)
++ 1 optional secretRef for S3 storage credentials.
+
+Usage in a workload Deployment/Job:
+  envFrom:
+    {{- include "ratatoskr.unit3d.envFrom" . | nindent 12 }}
+*/}}
+{{- define "ratatoskr.unit3d.envFrom" -}}
+- configMapRef:
+    name: {{ include "ratatoskr.fullname" . }}-unit3d-config
+- secretRef:
+    name: {{ include "ratatoskr.unit3d.secretName" . | quote }}
+{{- if .Values.mariadb.enabled }}
+- secretRef:
+    name: {{ include "ratatoskr.mariadb.secretName" . | quote }}
+{{- else }}
+- secretRef:
+    name: {{ required "unit3d.database.existingSecret is required when mariadb.enabled is false" .Values.unit3d.database.existingSecret | quote }}
+{{- end }}
+{{- if .Values.redis.enabled }}
+- secretRef:
+    name: {{ include "ratatoskr.redis.secretName" . | quote }}
+{{- else }}
+- secretRef:
+    name: {{ required "unit3d.redis.existingSecret is required when redis.enabled is false" .Values.unit3d.redis.existingSecret | quote }}
+{{- end }}
+{{- if .Values.meilisearch.enabled }}
+- secretRef:
+    name: {{ include "ratatoskr.meilisearch.secretName" . | quote }}
+{{- else }}
+- secretRef:
+    name: {{ required "unit3d.meilisearch.existingSecret is required when meilisearch.enabled is false" .Values.unit3d.meilisearch.existingSecret | quote }}
+{{- end }}
+- secretRef:
+    name: {{ include "ratatoskr.storage.secretName" . | quote }}
+    optional: true
+{{- end -}}

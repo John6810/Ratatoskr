@@ -49,11 +49,87 @@ unit3d:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Operator must set REQUIRED. Generated once with `php artisan key:generate`
-  # or `openssl rand -base64 32` prefixed with "base64:".
-  # Do NOT regenerate post-deploy: see ADR-0004 for the encrypted-column
-  # corruption gotcha.
+  # APP_KEY — Laravel encryption key. Three operator paths:
+  #   1. Inline (default): set unit3d.appKey to a "base64:..." value.
+  #      Generated via `php artisan key:generate --show` or
+  #      `echo "base64:$(openssl rand -base64 32)"`.
+  #   2. Bootstrap: set unit3d.bootstrapAppKey=true. The chart runs a
+  #      one-shot Job pre-install that generates a key and patches the
+  #      chart-managed Secret. Mutually exclusive with existingSecret.
+  #   3. External: set unit3d.existingSecret to a sealed-secrets / ESO
+  #      Secret name. Chart references it; never creates one.
+  #
+  # Do NOT rotate APP_KEY post-deploy without a coordinated re-encryption
+  # migration. ADR-0004 documents the encrypted-column corruption gotcha.
   appKey: ""
+
+  # Opt-in: chart runs a Job that generates an APP_KEY in-cluster and
+  # patches the chart-managed unit3d Secret. Off by default.
+  bootstrapAppKey: false
+
+  # External Secret path: when set, chart does NOT create a
+  # unit3d Secret; workloads reference this Secret name in their
+  # envFrom. Mutually exclusive with bootstrapAppKey (schema + template
+  # guard).
+  existingSecret: ""
+  existingSecretAppKeyKey: APP_KEY
+
+  # ---- External endpoints ------------------------------------------------
+  # Used only when the corresponding chart subchart is disabled.
+  # When mariadb.enabled / redis.enabled / meilisearch.enabled is true,
+  # the chart wires the workloads to the in-cluster Service and these
+  # values are ignored.
+
+  database:
+    # Required when mariadb.enabled: false. FQDN or in-cluster service
+    # of an external MariaDB (RDS, Aiven, OVH managed, etc.).
+    host: ""
+    port: 3306
+    name: unit3d
+    user: unit3d
+    # MANDATORY when mariadb.enabled: false. Operator-supplied Secret
+    # holding the application user password. Chart never creates this.
+    existingSecret: ""
+    existingSecretPasswordKey: DB_PASSWORD
+
+  redis:
+    # Required when redis.enabled: false.
+    host: ""
+    port: 6379
+    existingSecret: ""
+    existingSecretPasswordKey: REDIS_PASSWORD
+
+  meilisearch:
+    # Required when meilisearch.enabled: false.
+    host: ""
+    port: 7700
+    existingSecret: ""
+    existingSecretMasterKeyKey: MEILI_MASTER_KEY
+
+  # ---- Storage routing (per ADR-0002) ------------------------------------
+  # Three Storage-aware disks. Each can flip to s3 independently.
+  # When ANY is "s3", the chart renders a unit3d-storage Secret with
+  # AWS_* keys (or references unit3d.storage.s3.existingSecret).
+  storage:
+    torrentFiles:
+      driver: local      # local | s3
+    subtitleFiles:
+      driver: local
+    attachmentFiles:
+      driver: local
+    # S3 credentials block. Used by every disk with driver: s3.
+    s3:
+      key: ""
+      secret: ""
+      region: ""
+      bucket: ""
+      endpoint: ""
+      usePathStyleEndpoint: false
+      # External Secret path. When set, chart does NOT create the
+      # unit3d-storage Secret; workloads reference this Secret name.
+      existingSecret: ""
+      existingSecretKeyKey: AWS_ACCESS_KEY_ID
+      existingSecretSecretKeyKey: AWS_SECRET_ACCESS_KEY
 
   # Public URL operators reach the tracker on. Used by Laravel for
   # absolute URL generation (emails, signed routes, RSS feeds).
@@ -98,10 +174,13 @@ unit3d:
     runAsGroup: 33
     fsGroup: 33
 
-  # Container security context (ratatoskr base hardening).
+  # Container security context (ratatoskr base hardening + PSA
+  # restricted compliance via seccompProfile RuntimeDefault).
   containerSecurityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
     capabilities:
       drop:
         - ALL

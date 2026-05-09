@@ -6,12 +6,17 @@
 # Excluded from `helm package` via .helmignore (ci/ is omitted).
 unit3d:
   appKey: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  bootstrapAppKey: false
+  existingSecret: ""
 mariadb:
   auth:
     rootPassword: "test-root-password-not-real"
     password: "test-app-password-not-real"
+    existingSecret: ""
 redis:
   auth:
     password: "test-redis-password-not-real"
+    existingSecret: ""
 meilisearch:
   masterKey: "test-meili-key-16-bytes-minimum-not-real"
+  existingSecret: ""

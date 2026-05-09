@@ -1,0 +1,101 @@
+{{- if .Values.scheduler.enabled }}
+{{- $component := "scheduler" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ratatoskr.scheduler.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: unit3d-scheduler
+spec:
+  # NEVER more than 1 replica per ADR-0005. Multiple schedulers
+  # produce duplicate cron firings — UNIT3D scheduled jobs (peer/seedtime
+  # accounting, hit-and-run sweeps, AutoSyncTorrentsToMeilisearch) are
+  # not idempotent under concurrent runs. Hardcoded; no values knob.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/name: unit3d-scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        app.kubernetes.io/name: unit3d-scheduler
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/unit3d-app/configmap.yaml") . | sha256sum }}
+        checksum/filesystems: {{ include (print $.Template.BasePath "/unit3d-app/configmap-filesystems.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- toYaml .Values.unit3d.podSecurityContext | nindent 8 }}
+      containers:
+        - name: unit3d-scheduler
+          image: {{ include "ratatoskr.unit3d.image" . | quote }}
+          imagePullPolicy: {{ .Values.unit3d.image.pullPolicy | default "IfNotPresent" }}
+          # Laravel 10+ self-scheduling primitive. Sleeps until the next
+          # minute and dispatches due tasks via App\Console\Kernel.
+          command:
+            - php
+            - /app/artisan
+            - schedule:work
+          envFrom:
+            {{- include "ratatoskr.unit3d.envFrom" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.unit3d.containerSecurityContext | nindent 12 }}
+          livenessProbe:
+            exec:
+              command:
+                - php
+                - /app/artisan
+                - --version
+            initialDelaySeconds: 15
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: filesystems-config
+              mountPath: /app/config/filesystems.php
+              subPath: filesystems.php
+              readOnly: true
+            {{- if .Values.storage.enabled }}
+            - name: storage
+              mountPath: /app/storage
+            {{- end }}
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: caddy-data
+              mountPath: /data/caddy
+            - name: caddy-config
+              mountPath: /config/caddy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: filesystems-config
+          configMap:
+            name: {{ include "ratatoskr.fullname" . }}-unit3d-filesystems-config
+        {{- if .Values.storage.enabled }}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "ratatoskr.fullname" . }}-unit3d-storage
+        {{- end }}
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,91 @@
+{{- if .Values.migrate.enabled }}
+{{- $component := "migration" -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ratatoskr.migrate.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: unit3d-migrate
+  annotations:
+    # Run BEFORE the Deployments come up but AFTER chart-managed
+    # Secrets (-5) and the bootstrap-app-key Job (-3, when enabled).
+    "helm.sh/hook": "pre-install,pre-upgrade"
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit | default 3 }}
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        app.kubernetes.io/name: unit3d-migrate
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: OnFailure
+      securityContext:
+        {{- toYaml .Values.unit3d.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "ratatoskr.unit3d.image" . | quote }}
+          imagePullPolicy: {{ .Values.unit3d.image.pullPolicy | default "IfNotPresent" }}
+          # Chained migrate + seed + scout:sync-index-settings.
+          # Sync push lands the filterableAttributes config to MeiliSearch
+          # (UNIT3D v9.2.0 declares them in config/scout.php but no
+          # automatic push command exists; without this, /torrents 500s
+          # on the status filter). Idempotent — safe on every redeploy.
+          command: ["sh", "-c"]
+          args:
+            - >-
+              php /app/artisan migrate --force --seed &&
+              php /app/artisan scout:sync-index-settings
+          envFrom:
+            {{- include "ratatoskr.unit3d.envFrom" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            {{- toYaml .Values.unit3d.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            # Mount filesystems.php override for symmetry with the
+            # other UNIT3D workloads. Seed data is DB-only at v9.2.0
+            # (no filesystem writes from seeders), but mounting the
+            # override keeps the migrate Job's filesystem view
+            # consistent if a future migration writes files.
+            - name: filesystems-config
+              mountPath: /app/config/filesystems.php
+              subPath: filesystems.php
+              readOnly: true
+            {{- if .Values.storage.enabled }}
+            - name: storage
+              mountPath: /app/storage
+            {{- end }}
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: filesystems-config
+          configMap:
+            name: {{ include "ratatoskr.fullname" . }}-unit3d-filesystems-config
+        {{- if .Values.storage.enabled }}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "ratatoskr.fullname" . }}-unit3d-storage
+        {{- end }}
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

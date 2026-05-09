@@ -89,14 +89,12 @@
     "unit3d": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["appKey"],
       "properties": {
         "image": { "$ref": "#/definitions/image" },
-        "appKey": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Required. Generate once via 'php artisan key:generate' or 'openssl rand -base64 32' prefixed with 'base64:'. Never regenerate (corrupts encrypted columns)."
-        },
+        "appKey": { "type": "string" },
+        "bootstrapAppKey": { "type": "boolean" },
+        "existingSecret": { "type": "string" },
+        "existingSecretAppKeyKey": { "type": "string", "minLength": 1 },
         "appUrl": { "type": "string", "format": "uri" },
         "appEnv": {
           "type": "string",
@@ -112,8 +110,111 @@
         "resources": { "$ref": "#/definitions/resources" },
         "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
         "containerSecurityContext": { "type": "object", "additionalProperties": true },
-        "probes": { "type": "object", "additionalProperties": true }
-      }
+        "probes": { "type": "object", "additionalProperties": true },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "name": { "type": "string", "minLength": 1 },
+            "user": { "type": "string", "minLength": 1 },
+            "existingSecret": { "type": "string" },
+            "existingSecretPasswordKey": { "type": "string", "minLength": 1 }
+          }
+        },
+        "redis": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "existingSecret": { "type": "string" },
+            "existingSecretPasswordKey": { "type": "string", "minLength": 1 }
+          }
+        },
+        "meilisearch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "existingSecret": { "type": "string" },
+            "existingSecretMasterKeyKey": { "type": "string", "minLength": 1 }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "torrentFiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "driver": { "type": "string", "enum": ["local", "s3"] }
+              }
+            },
+            "subtitleFiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "driver": { "type": "string", "enum": ["local", "s3"] }
+              }
+            },
+            "attachmentFiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "driver": { "type": "string", "enum": ["local", "s3"] }
+              }
+            },
+            "s3": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "key": { "type": "string" },
+                "secret": { "type": "string" },
+                "region": { "type": "string" },
+                "bucket": { "type": "string" },
+                "endpoint": { "type": "string" },
+                "usePathStyleEndpoint": { "type": "boolean" },
+                "existingSecret": { "type": "string" },
+                "existingSecretKeyKey": { "type": "string", "minLength": 1 },
+                "existingSecretSecretKeyKey": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "description": "Inline APP_KEY: appKey set, no bootstrap, no existingSecret.",
+          "properties": {
+            "appKey": { "type": "string", "minLength": 1 },
+            "bootstrapAppKey": { "const": false },
+            "existingSecret": { "type": "string", "maxLength": 0 }
+          },
+          "required": ["appKey"]
+        },
+        {
+          "description": "Bootstrap APP_KEY: bootstrapAppKey=true, no inline appKey, no existingSecret.",
+          "properties": {
+            "appKey": { "type": "string", "maxLength": 0 },
+            "bootstrapAppKey": { "const": true },
+            "existingSecret": { "type": "string", "maxLength": 0 }
+          },
+          "required": ["bootstrapAppKey"]
+        },
+        {
+          "description": "External APP_KEY: existingSecret set, no inline appKey, no bootstrap.",
+          "properties": {
+            "appKey": { "type": "string", "maxLength": 0 },
+            "bootstrapAppKey": { "const": false },
+            "existingSecret": { "type": "string", "minLength": 1 }
+          },
+          "required": ["existingSecret"]
+        }
+      ]
     },
     "queue": {
       "type": "object",

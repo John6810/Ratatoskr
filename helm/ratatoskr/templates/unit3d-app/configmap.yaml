@@ -1,0 +1,55 @@
+{{- /*
+unit3d-config — non-sensitive UNIT3D / Laravel environment shared by
+unit3d-app, unit3d-queue, unit3d-scheduler, and unit3d-migrate. The
+hosts (DB_HOST, REDIS_HOST, MEILISEARCH_HOST) resolve to the chart's
+in-cluster Services when the corresponding subchart is enabled, or to
+operator-supplied external endpoints otherwise.
+*/}}
+{{- include "ratatoskr.unit3d.bootstrapGuard" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-unit3d-config
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+    app.kubernetes.io/name: unit3d-config
+data:
+  APP_ENV: {{ .Values.unit3d.appEnv | default "production" | quote }}
+  APP_DEBUG: {{ .Values.unit3d.appDebug | default false | quote }}
+  APP_URL: {{ .Values.unit3d.appUrl | quote }}
+  LOG_CHANNEL: "stack"
+  LOG_LEVEL: {{ .Values.unit3d.logLevel | default "info" | quote }}
+  TRUSTED_PROXIES: {{ .Values.unit3d.trustedProxies | quote }}
+
+  DB_CONNECTION: "mysql"
+  DB_HOST: {{ include "ratatoskr.dbHost" . | quote }}
+  DB_PORT: {{ include "ratatoskr.dbPort" . | quote }}
+  DB_DATABASE: {{ .Values.unit3d.database.name | default "unit3d" | quote }}
+  DB_USERNAME: {{ .Values.unit3d.database.user | default "unit3d" | quote }}
+
+  REDIS_HOST: {{ include "ratatoskr.redisHost" . | quote }}
+  REDIS_PORT: {{ include "ratatoskr.redisPort" . | quote }}
+
+  CACHE_STORE: "redis"
+  SESSION_DRIVER: "redis"
+  SESSION_CONNECTION: "session"
+  SESSION_LIFETIME: "120"
+
+  QUEUE_CONNECTION: "redis"
+  BROADCAST_CONNECTION: "redis"
+
+  MEILISEARCH_HOST: {{ include "ratatoskr.meiliUrl" . | quote }}
+  MEILI_ENV: {{ .Values.meilisearch.env | default "production" | quote }}
+
+  # VITE_ECHO_ADDRESS must be set even though UNIT3D v9.2.0 ships no
+  # Reverb / WebSocket server. Without it, parse_url() in the bootstrap
+  # chain returns null and the app fails at boot.
+  VITE_ECHO_ADDRESS: {{ .Values.unit3d.appUrl | quote }}
+
+  # Storage routing per ADR-0002. Each Storage-aware disk reads its
+  # driver from FILESYSTEM_<NAME>; "local" keeps the disk on PVC,
+  # "s3" routes to the S3 backend (credentials in unit3d-storage-secrets).
+  FILESYSTEM_TORRENT_FILES: {{ .Values.unit3d.storage.torrentFiles.driver | quote }}
+  FILESYSTEM_SUBTITLE_FILES: {{ .Values.unit3d.storage.subtitleFiles.driver | quote }}
+  FILESYSTEM_ATTACHMENT_FILES: {{ .Values.unit3d.storage.attachmentFiles.driver | quote }}

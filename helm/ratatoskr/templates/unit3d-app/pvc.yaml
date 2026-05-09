@@ -1,0 +1,24 @@
+{{- if .Values.storage.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-unit3d-storage
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+    app.kubernetes.io/name: unit3d-storage
+  annotations:
+    # Keep across helm uninstall — operator-uploaded user content
+    # (avatars, banners, .torrent files) lives here.
+    "helm.sh/resource-policy": "keep"
+spec:
+  accessModes:
+    - {{ .Values.storage.accessMode | quote }}
+  {{- $sc := include "ratatoskr.storageClass" (dict "scoped" .Values.storage.storageClass "global" .Values.global.storageClass) }}
+  {{- if $sc }}
+  storageClassName: {{ $sc | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.size | quote }}
+{{- end }}

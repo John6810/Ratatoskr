@@ -1,0 +1,154 @@
+{{- /*
+unit3d-filesystems-config — Laravel filesystems.php override per
+ADR-0002. Mounted at /app/config/filesystems.php (subPath) by the four
+UNIT3D workloads (app, queue, scheduler, migrate). Same content for
+all environments; per-disk driver flips via env vars (FILESYSTEM_*),
+not by templating the PHP.
+
+Source: kustomize/base/config/filesystems.php — port verbatim. Refresh
+on each UNIT3D upstream bump and diff against
+https://github.com/HDInnovations/UNIT3D/blob/<tag>/config/filesystems.php
+to incorporate any structural changes upstream while preserving the
+three Storage-aware env guards.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-unit3d-filesystems-config
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
+    app.kubernetes.io/name: unit3d-filesystems-config
+data:
+  filesystems.php: |
+    <?php
+
+    declare(strict_types=1);
+
+    /*
+     * ratatoskr override for UNIT3D config/filesystems.php. Mounted via
+     * ConfigMap subPath at /app/config/filesystems.php in the unit3d-app,
+     * unit3d-queue, unit3d-scheduler, and unit3d-migrate workloads.
+     *
+     * Three Storage-aware disks (torrent-files, subtitle-files,
+     * attachment-files) read their driver from FILESYSTEM_<NAME> env
+     * vars so the chart can flip them to s3 per-disk via values.
+     * Per ADR-0002.
+     */
+
+    return [
+        'default' => env('FILESYSTEM_DISK', 'local'),
+
+        'disks' => [
+            'local' => [
+                'driver' => 'local',
+                'root'   => storage_path('app'),
+                'throw'  => true,
+            ],
+
+            'public' => [
+                'driver'     => 'local',
+                'root'       => storage_path('app/public'),
+                'url'        => env('APP_URL').'/storage',
+                'visibility' => 'public',
+                'throw'      => true,
+            ],
+
+            's3' => [
+                'driver'                  => 's3',
+                'key'                     => env('AWS_ACCESS_KEY_ID'),
+                'secret'                  => env('AWS_SECRET_ACCESS_KEY'),
+                'region'                  => env('AWS_DEFAULT_REGION'),
+                'bucket'                  => env('AWS_BUCKET'),
+                'url'                     => env('AWS_URL'),
+                'endpoint'                => env('AWS_ENDPOINT'),
+                'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+                'throw'                   => false,
+            ],
+
+            'backups' => [
+                'driver' => 'local',
+                'root'   => storage_path('backups'),
+            ],
+
+            'article-images' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/images/articles/images'),
+            ],
+
+            'attachment-files' => [
+                'driver'                  => env('FILESYSTEM_ATTACHMENT_FILES', 'local'),
+                'root'                    => storage_path('app/files/attachments/files'),
+                'key'                     => env('FILESYSTEM_ATTACHMENT_FILES_KEY'),
+                'secret'                  => env('FILESYSTEM_ATTACHMENT_FILES_SECRET'),
+                'region'                  => env('FILESYSTEM_ATTACHMENT_FILES_REGION'),
+                'bucket'                  => env('FILESYSTEM_ATTACHMENT_FILES_BUCKET'),
+                'endpoint'                => env('FILESYSTEM_ATTACHMENT_FILES_ENDPOINT'),
+                'use_path_style_endpoint' => env('FILESYSTEM_ATTACHMENT_FILES_USE_PATH_STYLE_ENDPOINT', false),
+                'throw'                   => false,
+            ],
+
+            'user-avatars' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/images/users/avatars'),
+            ],
+
+            'user-icons' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/images/users/icons'),
+            ],
+
+            'category-images' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/images/categories/images'),
+            ],
+
+            'playlist-images' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/images/playlists/images'),
+            ],
+
+            'subtitle-files' => [
+                'driver'                  => env('FILESYSTEM_SUBTITLE_FILES', 'local'),
+                'root'                    => storage_path('app/files/subtitles/files'),
+                'key'                     => env('FILESYSTEM_SUBTITLE_FILES_KEY'),
+                'secret'                  => env('FILESYSTEM_SUBTITLE_FILES_SECRET'),
+                'region'                  => env('FILESYSTEM_SUBTITLE_FILES_REGION'),
+                'bucket'                  => env('FILESYSTEM_SUBTITLE_FILES_BUCKET'),
+                'endpoint'                => env('FILESYSTEM_SUBTITLE_FILES_ENDPOINT'),
+                'use_path_style_endpoint' => env('FILESYSTEM_SUBTITLE_FILES_USE_PATH_STYLE_ENDPOINT', false),
+                'throw'                   => false,
+            ],
+
+            'temporary-nfos' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/tmp/nfos'),
+            ],
+
+            'torrent-banners' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/images/torrents/banners'),
+            ],
+
+            'torrent-covers' => [
+                'driver' => 'local',
+                'root'   => storage_path('app/images/torrents/covers'),
+            ],
+
+            'torrent-files' => [
+                'driver'                  => env('FILESYSTEM_TORRENT_FILES', 'local'),
+                'root'                    => storage_path('app/files/torrents/files'),
+                'key'                     => env('FILESYSTEM_TORRENT_FILES_KEY'),
+                'secret'                  => env('FILESYSTEM_TORRENT_FILES_SECRET'),
+                'region'                  => env('FILESYSTEM_TORRENT_FILES_REGION'),
+                'bucket'                  => env('FILESYSTEM_TORRENT_FILES_BUCKET'),
+                'endpoint'                => env('FILESYSTEM_TORRENT_FILES_ENDPOINT'),
+                'use_path_style_endpoint' => env('FILESYSTEM_TORRENT_FILES_USE_PATH_STYLE_ENDPOINT', false),
+                'throw'                   => false,
+            ],
+        ],
+
+        'links' => [
+            public_path('storage') => storage_path('app/public'),
+        ],
+    ];

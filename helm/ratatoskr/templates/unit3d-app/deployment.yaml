@@ -1,0 +1,136 @@
+{{- $component := "app" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ratatoskr.unit3d.fullname" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: unit3d-app
+spec:
+  replicas: {{ .Values.unit3d.replicas | default 1 }}
+  # Recreate strategy at base level: the unit3d-storage PVC is RWO by
+  # default, RollingUpdate would deadlock on PVC handoff. prod-rwx
+  # overlays patch to RollingUpdate + multi-replica via values.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+      app.kubernetes.io/name: unit3d-app
+  template:
+    metadata:
+      labels:
+        {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+        app.kubernetes.io/name: unit3d-app
+      annotations:
+        # Pod rollout on ConfigMap content change (Helm equivalent of
+        # Kustomize's configMapGenerator name-suffix-hash behaviour).
+        checksum/config: {{ include (print $.Template.BasePath "/unit3d-app/configmap.yaml") . | sha256sum }}
+        checksum/filesystems: {{ include (print $.Template.BasePath "/unit3d-app/configmap-filesystems.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- toYaml .Values.unit3d.podSecurityContext | nindent 8 }}
+      containers:
+        - name: unit3d-app
+          image: {{ include "ratatoskr.unit3d.image" . | quote }}
+          imagePullPolicy: {{ .Values.unit3d.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "ratatoskr.fullname" . }}-unit3d-config
+            - secretRef:
+                name: {{ include "ratatoskr.unit3d.secretName" . | quote }}
+            {{- if .Values.mariadb.enabled }}
+            - secretRef:
+                name: {{ include "ratatoskr.mariadb.secretName" . | quote }}
+            {{- else }}
+            - secretRef:
+                name: {{ required "unit3d.database.existingSecret is required when mariadb.enabled is false" .Values.unit3d.database.existingSecret | quote }}
+            {{- end }}
+            {{- if .Values.redis.enabled }}
+            - secretRef:
+                name: {{ include "ratatoskr.redis.secretName" . | quote }}
+            {{- else }}
+            - secretRef:
+                name: {{ required "unit3d.redis.existingSecret is required when redis.enabled is false" .Values.unit3d.redis.existingSecret | quote }}
+            {{- end }}
+            {{- if .Values.meilisearch.enabled }}
+            - secretRef:
+                name: {{ include "ratatoskr.meilisearch.secretName" . | quote }}
+            {{- else }}
+            - secretRef:
+                name: {{ required "unit3d.meilisearch.existingSecret is required when meilisearch.enabled is false" .Values.unit3d.meilisearch.existingSecret | quote }}
+            {{- end }}
+            - secretRef:
+                name: {{ include "ratatoskr.storage.secretName" . | quote }}
+                optional: true
+          resources:
+            {{- toYaml .Values.unit3d.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.unit3d.containerSecurityContext | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 4
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 4
+            failureThreshold: 3
+          volumeMounts:
+            - name: filesystems-config
+              mountPath: /app/config/filesystems.php
+              subPath: filesystems.php
+              readOnly: true
+            {{- if .Values.storage.enabled }}
+            - name: storage
+              mountPath: /app/storage
+            {{- end }}
+            - name: bootstrap-cache
+              mountPath: /app/bootstrap/cache
+            - name: caddy-data
+              mountPath: /data/caddy
+            - name: caddy-config
+              mountPath: /config/caddy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: filesystems-config
+          configMap:
+            name: {{ include "ratatoskr.fullname" . }}-unit3d-filesystems-config
+        {{- if .Values.storage.enabled }}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "ratatoskr.fullname" . }}-unit3d-storage
+        {{- end }}
+        - name: bootstrap-cache
+          emptyDir: {}
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
