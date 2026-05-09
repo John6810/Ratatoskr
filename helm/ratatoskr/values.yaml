@@ -305,6 +305,17 @@ mariadb:
     runAsGroup: 999
     fsGroup: 999
 
+  # Container-level security context. seccompProfile RuntimeDefault is
+  # required for PSA `restricted` profile compliance.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
+    capabilities:
+      drop:
+        - ALL
+
   # Pod-level termination grace. MariaDB writes to its data dir during
   # InnoDB recovery on every boot; 60s is generous but bounded.
   terminationGracePeriodSeconds: 60
@@ -353,6 +364,17 @@ redis:
     runAsUser: 999
     runAsGroup: 999
     fsGroup: 999
+
+  # Container-level security context. seccompProfile RuntimeDefault is
+  # required for PSA `restricted` profile compliance.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
+    capabilities:
+      drop:
+        - ALL
 
 # ---- meilisearch ---------------------------------------------------------
 meilisearch:
@@ -409,6 +431,17 @@ meilisearch:
     runAsUser: 65532
     runAsGroup: 65532
     fsGroup: 65532
+
+  # Container-level security context. seccompProfile RuntimeDefault is
+  # required for PSA `restricted` profile compliance.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    seccompProfile:
+      type: RuntimeDefault
+    capabilities:
+      drop:
+        - ALL
 
 # ---- storage (unit3d-storage PVC for the 14 PVC-bound disks per ADR-0002)
 storage:

@@ -322,6 +322,7 @@
         "persistence": { "$ref": "#/definitions/persistence" },
         "resources": { "$ref": "#/definitions/resources" },
         "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+        "containerSecurityContext": { "type": "object", "additionalProperties": true },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 }
       }
     },
@@ -361,7 +362,8 @@
         },
         "persistence": { "$ref": "#/definitions/persistence" },
         "resources": { "$ref": "#/definitions/resources" },
-        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" }
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+        "containerSecurityContext": { "type": "object", "additionalProperties": true }
       }
     },
     "meilisearch": {
@@ -380,7 +382,8 @@
         "persistence": { "$ref": "#/definitions/persistence" },
         "experimentalMetrics": { "type": "boolean" },
         "resources": { "$ref": "#/definitions/resources" },
-        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" }
+        "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
+        "containerSecurityContext": { "type": "object", "additionalProperties": true }
       },
       "oneOf": [
         {

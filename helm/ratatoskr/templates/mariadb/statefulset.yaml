@@ -57,11 +57,7 @@ spec:
           resources:
             {{- toYaml .Values.mariadb.resources | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
+            {{- toYaml .Values.mariadb.containerSecurityContext | nindent 12 }}
           startupProbe:
             exec:
               command:

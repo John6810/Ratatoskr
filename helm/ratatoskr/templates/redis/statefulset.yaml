@@ -57,11 +57,7 @@ spec:
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
+            {{- toYaml .Values.redis.containerSecurityContext | nindent 12 }}
           # Probes use sh -c so $REDIS_PASSWORD expands at exec time;
           # exec.command does not honour Kubernetes' $(VAR) substitution.
           livenessProbe:
