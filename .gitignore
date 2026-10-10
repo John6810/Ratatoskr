@@ -34,3 +34,9 @@ kubeconfig.*
 Thumbs.db
 *.swp
 *.swo
+
+# Python validation cache
+__pycache__/
+
+# Private local deployments, credentials, and test reports
+.local/

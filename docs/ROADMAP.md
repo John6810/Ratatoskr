@@ -4,7 +4,104 @@
 
 ratatoskr aims to become the reference Kubernetes deployment for [UNIT3D Community Edition](https://github.com/HDInnovations/UNIT3D). Multi-level — from `docker compose up` on a 4 GB VPS to a production-grade Kubernetes deployment serving tens of thousands of concurrent users — with the same building blocks throughout.
 
-This document tracks where we're going, what's in flight, and what's still on the drawing board. Each version is independently usable; you can stop at any level and still ship a working tracker.
+This document tracks where we're going, what's in flight, and what's still on the drawing board. Each release is intended to offer a usable deployment level; current blockers and verification evidence are recorded below.
+
+## Current assessment — review of `daeca89` (2026-10-10)
+
+The review findings are corrected in the working tree, chart `0.5.0-alpha.3`.
+Installation, upgrade, migration failure/recovery, and physical backup/restore
+now have executable regression coverage. The chart remains alpha; deployment
+stabilization comes before ingress parity, Gateway API, database HA, and Terraform.
+Historical releases below describe shipped scope, not certification of every path.
+
+### Review findings and corrections
+
+| ID | Priority | Original defect | Implemented correction |
+|---|---|---|---|
+| R1 | P1 | Smoke preflight failure could delete an existing namespace. | Cleanup requires creation by this invocation and the original namespace UID. Existing namespaces, creation races, replacement, and failed install paths are tested. PASS is emitted after cleanup. |
+| R2 | P1 | RWO→RWX finalization reset the released source PV to Delete. | Keep Retain until explicit operator reclamation. Rescue PVC preserves the old StorageClass; binding waits follow loader creation for WaitForFirstConsumer. |
+| R3 | P1 | Restore erased the target before downloading/preparing the backup. | Prepare first, retain all originals including dotfiles, recover them after copy-back failure, and keep the original datadir until verification. |
+| R4 | P1 | Pre-install migration hook depended on resources not created yet. | Ordinary revision-specific Job, dependency/storage initializer, and application startup gates. Scoped API RBAC and projected init-only tokens. |
+| R5 | P1 | MeiliSearch master key was not mapped to the Scout client variable. | Explicit MEILISEARCH_KEY references across Helm and Kustomize; authenticated Scout synchronization is exercised. |
+| R6 | P1 | Credential hooks could recreate Secrets and change APP_KEY on upgrade. | Cluster-side lookup preserves existing credentials; bootstrap generates once and fails closed on a missing upgrade key. Offline GitOps uses existing Secrets. Rotation guidance corrected. |
+| R7 | P2 | Smoke looked for a Job already deleted by hook cleanup. | Current revision's Job stays available for logs and Pod restarts; actual smoke success and namespace cleanup verified. |
+| R8 | P2 | Ingress was a no-op; external credentials and custom key names were inconsistent. | Unsupported ingress/storage modes fail explicitly. External-only schema, explicit key mapping, egress configuration, service accounts, probes, RWO scheduling/HPA limits, and RWX rolling strategy are wired and tested. |
+
+Real execution also exposed and fixed missing image CMD, invalid `auto` worker
+counts, FrankenPHP's port-80 capability/runtime requirements, and health-probe redirects
+hitting the login rate limit. Upstream seeders are not all idempotent: the shared
+Docker/Helm/Kustomize lifecycle now serializes migration Jobs and seeds a new
+database once. An interrupted seed leaves a durable marker that requires inspection
+before retrying. The restore drill now explicitly connects to its temporary Unix
+socket and verifies the server identity; backup-image shell arguments are preserved.
+Init waits explicitly handle SIGTERM so cancellation does not inherit a worker
+Pod's hour-long grace period.
+
+Multi-node execution then exposed immutable StatefulSet claim-template labels,
+an HTTP connection reset during rollout, and NFS copy/verification edge cases.
+Chart `0.5.0-alpha.3` preserves existing claim labels and gives HTTP endpoints
+10 seconds to drain before stopping. The storage migration validates the target
+PVC before stopping workloads, removes completed migration Pods before the swap,
+copies dotfiles without modifying the provisioner's mount-root metadata, and
+checks every regular file with SHA-256. Read failures now abort verification.
+
+Design and operating constraints: [ADR-0007](./adr/0007-deployment-lifecycle.md),
+[Helm guide](../helm/ratatoskr/README.md), [upgrade guide](./upgrade-guide.md),
+[restore guide](./backup-restore.md), and [migration script guide](../scripts/migration/README.md).
+
+### Verification evidence
+
+| Check | Result |
+|---|---|
+| Safety/configuration regression suite | 20 tests; namespace ownership, restore failures, retained PV, checksum I/O failures, immutable claim labels, and Helm configuration contracts |
+| Strict Helm lint and Kubernetes/CRD schemas | 238 resources across four Helm variants and three Kustomize overlays |
+| Application and backup Docker images | Built locally from this checkout |
+| Compose smoke | Healthy services, HTTP 302, initial seeding, successful second migration, SIGTERM cancellation of init waits, cleanup |
+| Helm lifecycle on disposable Kind | Fresh bootstrap, HTTP and authenticated search, stable credentials/data on upgrade, failed-migration gate, recovery, and external services with custom Secret keys |
+| Multi-node Helm RWX lifecycle | Real static NFS 4.0 mounts, two app replicas on different nodes, chart-version upgrade, old replicas remain available through a deliberately failed migration, Helm rollback, recovery, and authenticated external search |
+| RWO→RWX migration and storage rollback | Real copy of 132 test files plus symlink, full SHA-256 verification, stable APP_KEY and SQL sentinel, cross-node writes, Pod replacement, then successful rebind and restart on the retained original RWO PV |
+| HTTP during a local rolling upgrade | 367 requests, zero failures, p95 5.95 ms after adding the drain delay; the earlier run exposed one connection reset |
+| Browser session | Administrator login, torrent listing and an empty search result render correctly; authenticated session survives the upgrade |
+| Helm smoke script | All nine checks pass; final PASS after namespace cleanup |
+| Kustomize dev on disposable Kind | Fresh install, actual APP_KEY generation, repeat bootstrap preserves key, HTTP 302, authenticated Scout synchronization |
+| Physical backup/restore drill | Real MariaDB → mariadb-backup → zstd → encrypted Restic → prepare/copy-back → temporary DB queries; forced replacement preserves originals |
+| CI | New deployment-and-recovery workflow defines static, Compose, Helm/Kustomize lifecycle, multi-node NFS CSI, smoke, and backup/restore jobs; remote Actions execution requires a push |
+
+Local validation uses Helm 3.16.4, Kustomize 5.8.3, kubeconform 0.8.0, and
+Kubernetes 1.32.0 schemas. Helm lifecycle, Kustomize bootstrap, and smoke tests
+passed on isolated Kind clusters running both 1.32.0 and 1.37.0. CI uses the 1.32
+baseline. A separate three-node `ratatoskr-local` cluster now serves a local demo
+on loopback port 8080; pre-existing clusters and the default kubeconfig were not
+modified. Kind enforces NetworkPolicy; lifecycle API access and explicitly allowed
+external-service traffic are exercised.
+
+The local RWX tests use precreated NFS PVs. Downloads of NFS CSI images failed
+with registry TLS/timeouts, so dynamic provisioning remains unverified. NFS 4.0
+avoids a confirmed Ganesha/Linux 6.19+ directory-delegation incompatibility without
+changing host kernel parameters; see the [test guide](../scripts/tests/README.md).
+The fresh-cluster wrapper also needs an end-to-end CI run: creating a second
+concurrent three-node Kind cluster failed during node startup, before any tests.
+The individual RWX suites run against the existing local cluster. Production
+CSI/CNI, ingress, S3 backends, load, and dependency freshness remain separate
+checks. The HTTP sample above measures a local redirect during rollout, not
+authenticated application throughput or a production availability guarantee.
+
+### Next work, in order
+
+1. Run the new CI on the 1.32 baseline and qualify the lifecycle suite on the
+   intended production CNI, including API-server and external-service egress.
+2. Repeat the multi-node RWX suites with the production CSI drivers on disposable
+   data, including dynamic provisioning and retained-volume rollback. Measure
+   interruption with the intended ingress and a realistic authenticated workload.
+3. Complete supported Helm beta delivery: ingress, KEDA parity, chart publication,
+   and release documentation. `ingress.enabled=true` currently fails explicitly.
+4. Write ADR-0006 for Gateway API alongside Traefik, implement the routing resources,
+   and validate the storage/ingress matrix while preserving the `/announce` contract.
+5. Re-audit upstream S3 image support and establish a measured load baseline before
+   committing to an announce daemon, Galera, or numerical capacity targets.
+
+Full S3 image storage remains upstream-dependent. All scale envelopes below are
+planning targets, not benchmark results.
 
 ## Principles
 
@@ -86,27 +183,32 @@ This point release lands the storage scope originally planned for v0.4.0. **Hard
 
 **Scale envelope**: app tier scales freely. DB and `/announce` become the next bottlenecks. Conditional on upstream PRs; otherwise inherits the v0.3 RWX scale envelope.
 
-### v0.5.0 — Helm chart + Gateway API parity 📋
+### v0.5.0 — Helm chart, then ingress parity — In progress
 
-Helm parity with the Kustomize tree, plus a second supported ingress path. The two are paired: ADR-0006 formalizes Gateway API as a supported ingress alongside Traefik, and the Helm chart enumerates both modes via values toggles.
+The chart at [`helm/ratatoskr/`](../helm/ratatoskr/) is `0.5.0-alpha.3`.
+R1–R8 and the runtime startup/seed defects are corrected with local regression
+coverage. There are no external subchart dependencies.
 
-- Helm chart at feature parity with Kustomize: `helm/unit3d/` directory, `Chart.yaml`, `values.yaml` schema mirroring Kustomize `values.env` conventions so operators migrating Kustomize → Helm have a 1:1 value mapping
-- Chart structured by component (`unit3d.*`, `mariadb.*`, `redis.*`, `meilisearch.*`)
-- Subchart toggles (`mariadb.enabled`, etc.) so operators can bring their own managed DB
-- Optional Bitnami subcharts as dependencies, custom fallbacks if disabled
-- Pre-install hooks for migrations
-- Helm tests
-- Artifact Hub publication
-- `helm-lint` skill validates every PR
-- ADR-0006: Ingress controller pivot — Gateway API as supported path (formalizes the dual-ingress stance: Traefik default, Gateway API alternative)
-- `components/ingress-vanilla` — Gateway API resources (`HTTPRoute`, `Gateway`, `ReferenceGrant`) mirroring the `components/ingress-traefik` topology
-- Overlays test matrix expansion: `prod-rwo × prod-rwx × ingress-traefik × ingress-vanilla` = 4 combinations validated by `kustomize-validate` CI
+Implemented:
+
+- Component resources, values/schema, explicit credential mapping, and external services.
+- Revision-specific migration Jobs, startup gates, first-install seeding, retained Secrets.
+- NetworkPolicies, RWO co-location, RWX rolling app/queue updates, optional HPA/PDB.
+- Helm HTTP tests and static/lifecycle/backup-restore CI jobs.
+- Safe smoke cleanup, retained source volumes, and failure-preserving restores.
+
+Still required before beta/publication:
+
+- Run the new CI remotely and close the production CNI/CSI checks above.
+- Implement ingress templates and Gateway API/Traefik parity (ADR-0006).
+- Port the opt-in KEDA scaler and enforce mutual exclusion with queue HPA.
+- Publish the chart and Artifact Hub metadata after release gates pass.
 
 **Scale envelope**: same as v0.3, with Helm UX and a second supported ingress path.
 
 ### v0.6.0 — High-Performance `/announce` ⭐ 📋
 
-The technical differentiator. Decouples the BitTorrent announce path from PHP.
+Feasibility track after deployment stabilization and load measurement. Decouples the BitTorrent announce path from PHP only if an ADR establishes compatible private-tracker authentication, accounting, and failure behavior.
 
 - Dedicated daemon ([aquatic](https://github.com/greatest-ape/aquatic) Rust, or [chihaya](https://github.com/chihaya/chihaya) Go) handles `/announce`
 - Periodic sync from daemon to UNIT3D MariaDB via Redis pub/sub or batched writes
@@ -114,7 +216,7 @@ The technical differentiator. Decouples the BitTorrent announce path from PHP.
 - Routing rule on the Ingress sends `/announce` to the daemon, everything else to PHP
 - Migration path documented for existing operators (no breaking change to the announce URL)
 
-This is what existing UNIT3D deployments do not have. PHP serving 10,000 peer announces per second is wasted compute.
+Benchmark the current PHP path first. A generic tracker daemon is not a drop-in replacement for UNIT3D's private-tracker behavior; integration requirements and any upstream dependency must be explicit before implementation.
 
 **Scale envelope**: hundreds of thousands of concurrent peers, web UI scales independently.
 
