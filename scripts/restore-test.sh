@@ -37,6 +37,11 @@ DRILL_DIR="$(mktemp -d -t ratatoskr-drill-XXXXXX)"
 DATADIR="${DRILL_DIR}/data"
 SOCKET="${DRILL_DIR}/mysql.sock"
 PIDFILE="${DRILL_DIR}/mysql.pid"
+# This ephemeral server accepts Unix sockets only. Explicit socket protocol
+# prevents environment defaults from redirecting the drill to another server;
+# TLS is unnecessary on that local socket and its restored certificate may
+# be self-signed. Remote backup connections keep their existing TLS settings.
+DRILL_CLIENT=(mariadb --no-defaults --host=localhost --protocol=socket --skip-ssl --socket="${SOCKET}" --user=root)
 
 # Tear down the spawned mariadbd and wipe scratch dir on exit, regardless of
 # whether the drill passed or failed.
@@ -56,18 +61,9 @@ trap cleanup EXIT
 
 mkdir -p "${DATADIR}"
 
-HOST_FLAG=()
-if [[ -n "${BACKUP_HOSTNAME:-}" ]]; then
-    HOST_FLAG=(--host "${BACKUP_HOSTNAME}")
-fi
-
-echo "[drill] streaming latest snapshot to ${DATADIR}"
-restic dump --tag "${BACKUP_TAG}" "${HOST_FLAG[@]}" latest /mariadb.xbstream.zst \
-| zstd -d \
-| mbstream -x -C "${DATADIR}"
-
-echo "[drill] preparing backup"
-mariadb-backup --prepare --target-dir="${DATADIR}"
+# Exercise the production restore implementation, including copy-back.
+echo "[drill] restoring latest snapshot to ${DATADIR}"
+TARGET_DIR="${DATADIR}" RESTORE_FORCE=false restore latest
 
 echo "[drill] starting ephemeral mariadbd on socket ${SOCKET}"
 # --skip-networking: no TCP listener (drill is local-only via unix socket)
@@ -83,23 +79,29 @@ mariadbd \
 
 # Wait up to DRILL_TIMEOUT seconds for the server to accept queries.
 for _ in $(seq 1 "${DRILL_TIMEOUT}"); do
-    if mariadb --socket="${SOCKET}" -e 'SELECT 1' >/dev/null 2>&1; then
+    if "${DRILL_CLIENT[@]}" -e 'SELECT 1' >/dev/null 2>&1; then
         break
     fi
     sleep 1
 done
 
-if ! mariadb --socket="${SOCKET}" -e 'SELECT 1' >/dev/null 2>&1; then
+if ! "${DRILL_CLIENT[@]}" -e 'SELECT 1' >/dev/null 2>&1; then
     echo "[drill] FAIL: mariadbd never accepted connections within ${DRILL_TIMEOUT}s" >&2
+    "${DRILL_CLIENT[@]}" -e 'SELECT 1' >&2 || true
     echo "[drill] mariadbd log tail:" >&2
     tail -n 50 "${DRILL_DIR}/mariadbd.log" >&2 || true
     exit 1
 fi
 
 echo "[drill] running sanity queries on database ${DRILL_DB_NAME}"
-USERS_COUNT="$(mariadb --socket="${SOCKET}" -N -B -e \
+actual_socket="$("${DRILL_CLIENT[@]}" -N -B -e 'SELECT @@socket')"
+if [[ "$actual_socket" != "$SOCKET" ]]; then
+    echo "[drill] FAIL: connected to a server other than the restored database" >&2
+    exit 1
+fi
+USERS_COUNT="$("${DRILL_CLIENT[@]}" -N -B -e \
     "SELECT COUNT(*) FROM \`${DRILL_DB_NAME}\`.users")"
-TORRENTS_COUNT="$(mariadb --socket="${SOCKET}" -N -B -e \
+TORRENTS_COUNT="$("${DRILL_CLIENT[@]}" -N -B -e \
     "SELECT COUNT(*) FROM \`${DRILL_DB_NAME}\`.torrents")"
 
 echo "[drill]   users    = ${USERS_COUNT}"
