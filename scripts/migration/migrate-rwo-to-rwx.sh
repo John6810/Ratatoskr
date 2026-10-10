@@ -2,7 +2,7 @@
 # scripts/migration/migrate-rwo-to-rwx.sh
 #
 # Operationalizes upgrade-guide.md § "Path 2 — prod-rwo -> prod-rwx,
-# Option B (Manual PVC swap, in-place)" as an idempotent POSIX sh
+# Option B (Manual PVC swap, in-place)" as a guarded POSIX sh
 # script.
 #
 # CANONICAL DOC: docs/upgrade-guide.md, anchor:
@@ -80,6 +80,7 @@
 # LICENSE: AGPL-3.0-or-later (matches the repo)
 
 set -eu
+umask 077
 
 # ============================================================================
 # Constants
@@ -204,6 +205,7 @@ on_abort() {
     case "$PHASE" in
         1)
             warn "Aborted during scale-down. Workloads may be at replicas=0."
+            warn "Re-apply the original RWO overlay to recreate its migration Job before scaling back."
             warn "Recovery: scale them back to the prod-rwo defaults manually:"
             warn "  kubectl scale -n $NAMESPACE deployment/unit3d-app --replicas=1"
             warn "  kubectl scale -n $NAMESPACE deployment/unit3d-queue --replicas=1"
@@ -219,13 +221,14 @@ on_abort() {
         3)
             warn "Aborted during rsync. Loader Pod may still be running."
             warn "Recovery: kubectl delete pod -n $NAMESPACE $LOADER_POD"
-            warn "Then re-run this script — preflights detect partial state."
+            warn "Do not re-run blindly: the source PVC has already been swapped."
+            warn "Inspect both volumes and follow the retained-volume rollback procedure."
             warn "Work directory preserved at: $WORK_DIR"
             ;;
         4)
             warn "Aborted during overlay apply / rollout."
-            warn "Recovery: kubectl rollout undo -n $NAMESPACE deployment/unit3d-app"
-            warn "Then investigate before re-applying the prod-rwx overlay."
+            warn "Inspect unit3d-migrate and the target overlay before retrying rollout."
+            warn "Deployment rollout undo does not reverse the PVC swap; use the storage rollback guide."
             ;;
         *)
             ;;
@@ -290,6 +293,7 @@ preflight() {
         -o jsonpath='{.spec.volumeName}' 2>/dev/null)"
     OLD_PVC_SIZE="$(kc get pvc -n "$NAMESPACE" "$PVC_NAME" \
         -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null)"
+    OLD_STORAGE_CLASS="$(kc get pv "$OLD_PV" -o jsonpath='{.spec.storageClassName}')"
     log "13/ PVC $PVC_NAME: Bound, RWO, pv=$OLD_PV, size=$OLD_PVC_SIZE"
 
     # 14. NEW_STORAGE_CLASS present
@@ -308,6 +312,29 @@ preflight() {
     log "14/ StorageClass '$NEW_STORAGE_CLASS' exists (provisioner=$sc_provisioner)"
     log "    NOTE: StorageClass.accessModes is hint-only. Verify the"
     log "    provisioner supports ReadWriteMany before proceeding in production."
+
+    # Validate the target before stopping workloads. A later apply must not
+    # remove the new PVC's StorageClass or request an unsupported resize.
+    mkdir -p "$WORK_DIR"
+    if ! kc kustomize "$OVERLAY_PATH" > "$WORK_DIR/target.yaml" ||
+       ! kc create --dry-run=client --validate=false -f "$WORK_DIR/target.yaml" -o json > "$WORK_DIR/target.json"; then
+        err "target overlay cannot be rendered for this cluster; no workloads were stopped"
+        exit 1
+    fi
+    if ! jq -se --arg ns "$NAMESPACE" --arg sc "$NEW_STORAGE_CLASS" --arg size "$OLD_PVC_SIZE" '
+        [.[] | (if .kind == "List" then .items[] else . end) |
+            select(.kind == "PersistentVolumeClaim" and .metadata.name == "unit3d-storage")] as $claims |
+        ($claims | length) == 1 and
+        $claims[0].metadata.namespace == $ns and
+        $claims[0].spec.storageClassName == $sc and
+        $claims[0].spec.accessModes == ["ReadWriteMany"] and
+        $claims[0].spec.resources.requests.storage == $size
+    ' "$WORK_DIR/target.json" >/dev/null; then
+        err "target overlay must explicitly declare $NAMESPACE/$PVC_NAME with ReadWriteMany, storageClassName=$NEW_STORAGE_CLASS and storage=$OLD_PVC_SIZE"
+        err "align the overlay first; perform any capacity expansion as a separate operation"
+        exit 1
+    fi
+    log "    target overlay PVC matches the planned swap"
 
     # 15. unit3d-app Deployment is single-replica
     app_replicas="$(kc get deployment -n "$NAMESPACE" unit3d-app \
@@ -365,7 +392,9 @@ preflight() {
     for verb_resource in \
         "patch persistentvolumes" \
         "delete persistentvolumeclaims" \
-        "apply persistentvolumeclaims"; do
+        "create persistentvolumeclaims" \
+        "patch persistentvolumeclaims" \
+        "delete jobs"; do
         verb="${verb_resource% *}"
         resource="${verb_resource#* }"
         scope_flag="-n $NAMESPACE"
@@ -420,6 +449,12 @@ mutate_scale_down() {
         wait_pods_drained "unit3d-queue"     "app.kubernetes.io/name=unit3d-queue"     || exit 20
         wait_pods_drained "unit3d-scheduler" "app.kubernetes.io/name=unit3d-scheduler" || exit 20
     fi
+    # Even a completed migration Pod still references the PVC and can keep
+    # Kubernetes PVC protection active. Preflight already refused an active Job.
+    # Remove completion evidence only after all consumers have stopped; the
+    # target overlay recreates the Job before the application starts again.
+    kc_mutate delete job -n "$NAMESPACE" unit3d-migrate \
+        --ignore-not-found --cascade=foreground --wait=true --timeout=120s || exit 20
     log "scale-down complete"
 }
 
@@ -492,7 +527,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: ""
+  storageClassName: "$OLD_STORAGE_CLASS"
   volumeName: $OLD_PV
   resources:
     requests:
@@ -520,15 +555,6 @@ spec:
       storage: $OLD_PVC_SIZE
 EOF
     log "25/ new RWX PVC $PVC_NAME applied (storageClass=$NEW_STORAGE_CLASS)"
-
-    if [ "$DRY_RUN" != "1" ]; then
-        # Wait for both PVCs to bind.
-        kc wait --for=jsonpath='{.status.phase}=Bound' \
-            -n "$NAMESPACE" "pvc/$RESCUE_PVC_NAME" --timeout=120s || exit 24
-        kc wait --for=jsonpath='{.status.phase}=Bound' \
-            -n "$NAMESPACE" "pvc/$PVC_NAME"          --timeout=120s || exit 25
-        log "    both PVCs Bound"
-    fi
 }
 
 mutate_loader_pod() {
@@ -541,7 +567,7 @@ mutate_loader_pod() {
     #   - readOnlyRootFilesystem:true (writes go to /old, /new, /tmp)
     #   - allowPrivilegeEscalation:false, capabilities.drop:[ALL]
     #   - seccompProfile RuntimeDefault
-    #   - apk add rsync at startup (alpine:3.20 includes apk)
+    #   - use preinstalled rsync or cp; no runtime package installation
     #
     # Old PVC mounted RO at /old, new RWX PVC at /new.
     kc_apply_stdin <<EOF || exit 26
@@ -575,24 +601,13 @@ spec:
         - -c
         - |
           set -eu
-          # apk needs root for the install path; alpine ships rsync
-          # as a separate package. The container runs as UID 33,
-          # which means apk will fail unless we pre-bake an image
-          # with rsync preinstalled. To stay base-image-only, we
-          # use busybox's built-in 'cp -a' as a fallback when rsync
-          # is absent.
-          if command -v rsync >/dev/null 2>&1; then
-            COPY_CMD="rsync -a --delete /old/ /new/"
-          else
-            # busybox cp -a preserves ownership, timestamps, symlinks.
-            # No --delete equivalent; the new PVC is empty so this is fine.
-            COPY_CMD="cp -a /old/. /new/"
-          fi
-          echo "loader ready (copy: \$COPY_CMD)"
+          echo "loader ready"
           # Stay alive indefinitely so 'kubectl exec' can drive the
           # actual rsync without a deadline. The script deletes the
           # Pod explicitly when copy + checksum verification finish.
-          tail -f /dev/null
+          trap 'exit 0' TERM INT
+          tail -f /dev/null &
+          wait \$!
       volumeMounts:
         - name: old
           mountPath: /old
@@ -631,6 +646,12 @@ EOF
     if [ "$DRY_RUN" != "1" ]; then
         kc wait --for=condition=Ready -n "$NAMESPACE" \
             "pod/$LOADER_POD" --timeout=180s || exit 26
+        # Wait for both PVCs to bind.
+        kc wait --for=jsonpath='{.status.phase}=Bound' \
+            -n "$NAMESPACE" "pvc/$RESCUE_PVC_NAME" --timeout=120s || exit 24
+        kc wait --for=jsonpath='{.status.phase}=Bound' \
+            -n "$NAMESPACE" "pvc/$PVC_NAME"          --timeout=120s || exit 25
+        log "    both PVCs Bound"
         log "    pvc-loader Pod is Ready"
     fi
 }
@@ -644,40 +665,52 @@ mutate_rsync_and_verify() {
         return 0
     fi
 
-    # 27. rsync (or cp -a fallback). The container start-cmd printed
-    # the chosen tool; we re-detect here for the actual run.
-    if kc exec -n "$NAMESPACE" "$LOADER_POD" -- \
-            sh -c 'command -v rsync >/dev/null 2>&1'; then
-        log "27/ running rsync -a --delete /old/ /new/"
-        kc exec -n "$NAMESPACE" "$LOADER_POD" -- \
-            rsync -a --delete /old/ /new/ || exit 27
-    else
-        log "27/ rsync absent; running cp -a /old/. /new/"
-        kc exec -n "$NAMESPACE" "$LOADER_POD" -- \
-            sh -c 'cp -a /old/. /new/' || exit 27
-    fi
+    # Copy children, including dotfiles, without changing the mount root's
+    # metadata. That directory belongs to the provisioner; UID 33 cannot set
+    # its timestamps/ownership on NFS even when the directory is writable.
+    # The new PVC is empty, so no deletion of destination entries is needed.
+    log "27/ copying storage contents (rsync or cp -a)"
+    kc exec -n "$NAMESPACE" "$LOADER_POD" -- sh -ec '
+        for entry in /old/* /old/.[!.]* /old/..?*; do
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            if command -v rsync >/dev/null 2>&1; then
+                rsync -a "$entry" /new/
+            else
+                cp -a "$entry" /new/
+            fi
+        done
+    ' || exit 27
     log "27/ data copy complete"
 
-    # 28. Checksum verification (sample of up to 100 files).
-    log "28/ verifying checksums on a 100-file sample"
-    old_sums="$(kc exec -n "$NAMESPACE" "$LOADER_POD" -- sh -c '
-        cd /old && find . -type f | sort | head -100 \
-          | xargs -I {} md5sum {} 2>/dev/null
-    ' || true)"
-    new_sums="$(kc exec -n "$NAMESPACE" "$LOADER_POD" -- sh -c '
-        cd /new && find . -type f | sort | head -100 \
-          | xargs -I {} md5sum {} 2>/dev/null
-    ' || true)"
-    if [ -z "$old_sums" ]; then
-        warn "28/ old PVC contained no files in 100-sample; skipping checksum"
-    elif [ "$old_sums" != "$new_sums" ]; then
+    # 28. Verify every regular file. NUL-delimited paths handle spaces, quotes,
+    # and newlines. Each command must succeed: an I/O error is not an empty PVC.
+    log "28/ verifying SHA-256 checksums of all regular files"
+    if ! old_sums="$(kc exec -n "$NAMESPACE" "$LOADER_POD" -- sh -ec '
+        cd /old
+        find . -type f -print0 > /tmp/old-files
+        LC_ALL=C sort -z /tmp/old-files > /tmp/old-files-sorted
+        xargs -0 -r sha256sum < /tmp/old-files-sorted
+    ')"; then
+        err "28/ failed to read or checksum the source PVC"
+        exit 28
+    fi
+    if ! new_sums="$(kc exec -n "$NAMESPACE" "$LOADER_POD" -- sh -ec '
+        cd /new
+        find . -type f -print0 > /tmp/new-files
+        LC_ALL=C sort -z /tmp/new-files > /tmp/new-files-sorted
+        xargs -0 -r sha256sum < /tmp/new-files-sorted
+    ')"; then
+        err "28/ failed to read or checksum the destination PVC"
+        exit 28
+    fi
+    if [ "$old_sums" != "$new_sums" ]; then
         err "28/ checksum mismatch between /old and /new"
         printf '%s\n' "$old_sums" > "$WORK_DIR/old-sums.txt"
         printf '%s\n' "$new_sums" > "$WORK_DIR/new-sums.txt"
         err "    diffs written to $WORK_DIR/{old,new}-sums.txt"
         exit 28
     else
-        log "28/ checksum sample matches (100 files)"
+        log "28/ all regular-file checksums match"
     fi
 }
 
@@ -690,9 +723,7 @@ mutate_cleanup_loader() {
     log "    pvc-loader Pod deleted"
 
     # Drop the rescue PVC. The old PV becomes Released again, with
-    # reclaimPolicy=Retain protecting the data. Step 35 (post-rollout)
-    # flips reclaimPolicy back to Delete; the operator deletes the
-    # orphaned PV after the soak period.
+    # reclaimPolicy=Retain protecting the data until explicit operator cleanup.
     kc_mutate delete pvc -n "$NAMESPACE" "$RESCUE_PVC_NAME" \
         --wait=true --timeout=120s --ignore-not-found || true
     log "    rescue PVC $RESCUE_PVC_NAME deleted (old PV preserved)"
@@ -706,6 +737,10 @@ mutate_apply_overlay() {
         err "OVERLAY_PATH '$OVERLAY_PATH' not found (run from repo root or override)"
         exit 29
     fi
+    # The overlay changes the immutable migration Pod template (RWO affinity
+    # is removed). Preflight already refuses an active migration Job.
+    kc_mutate delete job -n "$NAMESPACE" unit3d-migrate \
+        --ignore-not-found --wait=true --timeout=120s || exit 29
     kc_mutate apply -k "$OVERLAY_PATH" || exit 29
     log "29/ overlay applied: $OVERLAY_PATH"
 
@@ -718,21 +753,17 @@ mutate_apply_overlay() {
 
 mutate_finalize_old_pv() {
     PHASE=4
-    banner "MUTATION 35 — flip old PV reclaimPolicy back to Delete"
+    banner "FINALIZE — preserve the source PV for rollback"
 
     if [ -z "$OLD_PV" ]; then
-        warn "OLD_PV unknown; skipping reclaimPolicy reset"
+        warn "OLD_PV unknown; cannot report the retained source volume"
         return 0
     fi
-    # The PV is now Released with no claimant. Flipping reclaimPolicy
-    # back to Delete does NOT immediately delete a Released PV —
-    # Delete only fires when the BOUND state ends. So this is a
-    # housekeeping change for any future rebind.
+    # Delete on a Released PV can reclaim the backend immediately.
+    # Retain must stay in effect throughout the rollback window.
     kc_mutate patch pv "$OLD_PV" --type=merge \
-        -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}' || true
-    log "35/ old PV $OLD_PV reclaimPolicy: Retain -> Delete"
-    log "    The PV remains in the cluster (Released). After verifying the new"
-    log "    deployment for >= 24h, the operator can: kubectl delete pv $OLD_PV"
+        -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}' || exit 22
+    log "Old PV $OLD_PV remains Retain. Verify the new deployment before manual cleanup."
 }
 
 # ============================================================================
@@ -798,9 +829,9 @@ main() {
 
     PHASE=0
     banner "MIGRATION COMPLETE"
-    log "Old PV $OLD_PV is Released with reclaimPolicy=Delete."
+    log "Old PV $OLD_PV is Released with reclaimPolicy=Retain."
     log "After 24h+ of verified prod-rwx operation, run:"
-    log "    kubectl delete pv $OLD_PV"
+    log "    kubectl patch pv $OLD_PV --type=merge -p '{\"spec\":{\"persistentVolumeReclaimPolicy\":\"Delete\"}}'"
     log "Work directory preserved at: $WORK_DIR"
 }
 

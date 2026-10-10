@@ -298,56 +298,64 @@ This option is recommended because the rollback path is trivial — the old name
 
 ### Option B — Manual PVC swap (advanced, in-place)
 
-Higher operator skill required; the rollback discipline is stricter. Only choose this if Option A's parallel namespace is infeasible (cluster resource pressure, RBAC constraints, etc.).
+This path stops the application while the storage is copied. Use the guarded
+[migration script](../scripts/migration/README.md), which preserves the original
+PV and verifies the copy before restarting workloads.
 
-```bash
-# Step B1 — Stop traffic to the existing deployment
-kubectl scale -n unit3d deployment/unit3d-app --replicas=0
-kubectl scale -n unit3d deployment/unit3d-queue --replicas=0
-kubectl scale -n unit3d deployment/unit3d-scheduler --replicas=0
+1. Take and verify a MariaDB backup and an archive of `storage/`. Keep them through
+   the rollback window. Pause any GitOps reconciler that would restore replicas
+   while the migration is running.
+2. Set `NAMESPACE`, `NEW_STORAGE_CLASS`, and `OVERLAY_PATH`. The target overlay must
+   explicitly declare the same namespace, `ReadWriteMany`, the selected
+   `storageClassName`, and the original PVC's requested capacity. Perform any
+   capacity expansion separately. Include the production secrets, ingress CRDs,
+   and storage settings required by that overlay.
+3. Run the read-only preflight, then the migration:
 
-# Step B2 — Backup PVC contents (debug pod + tar). Use the
-# pvc-loader pattern from Path 1 Step 6, but READ-only (kubectl cp
-# from pod to local).
-# DO NOT delete the local tarball until Step B8 verifies success.
+   ```bash
+   DRY_RUN=1 sh scripts/migration/migrate-rwo-to-rwx.sh
+   sh scripts/migration/migrate-rwo-to-rwx.sh
+   ```
 
-# Step B3 — Backup MariaDB. Same mariadb-dump as Step A1.
-# Even if the data is in the PVC, MariaDB lives on a separate VCT-
-# managed volume — its accessModes are unaffected by the unit3d-
-# storage PVC swap. Belt-and-suspenders backup.
-
-# Step B4 — Delete the old PVC. Note: this CANNOT be undone.
-kubectl delete pvc -n unit3d unit3d-storage
-# Wait for the PVC to actually disappear (PVs may take a moment
-# to detach):
-kubectl wait --for=delete pvc/unit3d-storage -n unit3d --timeout=5m
-
-# Step B5 — Apply prod-rwx (creates new PVC with RWX accessModes)
-kubectl apply -k kustomize/overlays/prod-rwx
-
-# Step B6 — Restore PVC contents to the new PVC.
-# Use the same pvc-loader pattern + kubectl cp + tar as Path 1 Step 6.
-
-# Step B7 — For the 3 Storage-aware disks, sync the corresponding
-# subdirectories to the S3 bucket via rclone instead of restoring
-# them to the PVC (the prod-rwx values.env points the disks at S3).
-
-# Step B8 — Scale workloads back up
-kubectl scale -n unit3d deployment/unit3d-app --replicas=2
-kubectl scale -n unit3d deployment/unit3d-queue --replicas=2
-kubectl scale -n unit3d deployment/unit3d-scheduler --replicas=1
-```
+   The backup marker must be fresh; see the script guide. The script stops all
+   three consumers, removes the inactive migration Job, retains the old PV,
+   swaps PVCs, copies and checksums the data, and only then applies the target
+   overlay. A completed migration Pod must be removed before deleting its PVC.
+4. Verify application, queue, scheduler, authenticated search, and representative
+   files on different nodes. Re-enable GitOps only after its desired PVC matches
+   the live class and capacity. Keep the original PV on `Retain` during the
+   rollback window.
 
 ### Path 2 rollback
 
-- **Option A rollback**: revert the ingress swap (point ingress back at the old `unit3d` namespace's Service). No data loss; old namespace is intact.
-- **Option B rollback**: requires the prepared PVC tarball + MariaDB dump from Steps B2-B3. Re-apply prod-rwo (`kubectl apply -k kustomize/overlays/prod-rwo`), restore tarball + dump using the Path 1 Steps 5-6 patterns. Higher risk because the original PVC was destroyed in Step B4 — there is no live source to fall back to.
+- **Option A:** point ingress back to the original namespace after checking that
+  it has the data needed to resume service.
+- **Option B:** the old PVC is gone, but its PV is retained. Stop all application
+  consumers and remove the migration Job and loader Pod. Record the new RWX PV
+  and set it to `Retain` before removing its claim. Remove the rescue claim if it
+  still exists, then clear the original PV's stale `claimRef`. Recreate the
+  original RWO PVC with its original StorageClass, capacity, and `volumeName`
+  pointing to the retained PV. The migration work directory contains the original
+  PVC/PV JSON. Strip server-generated metadata, finalizers, status, and the old
+  last-applied annotation before using `kubectl create`. Reapply the original RWO
+  overlay, recreate its migration Job, and wait for all workloads to become ready.
 
-> **Discipline for Option B**: do not delete local backups (PVC tarball + MariaDB dump) until prod-rwx is verified stable for at least 1 week. The fastest way to lose data on Option B is to assume the rollout succeeded after 1 hour and clean up backups before the slow-cooking issues surface.
+The original PV contains the data from the time of the copy. Reconcile any writes
+accepted on RWX before switching back; retaining the new PV preserves those writes
+for recovery. Storage rollback does not undo database schema changes. Restore a
+verified DB backup if the application's schema compatibility requires it.
+
+The executable rehearsal is [`scripts/tests/rwx-migration.sh`](../scripts/tests/rwx-migration.sh).
+It checks the original files, APP_KEY, and a database sentinel after the return to
+RWO. Its namespace and data are disposable; do not run this test against production.
+
+Keep the backups until the replacement has been verified stable for at least one
+week. Reclaiming a retained PV is an explicit final cleanup operation.
 
 ## Path 3 — UNIT3D version bumps
 
-Updating the ratatoskr-built image tag (e.g., from `v9.2.0` to `v9.3.0` when upstream UNIT3D releases a new minor version). Near-zero downtime on prod-rwx via the RollingUpdate strategy; brief Recreate-strategy downtime on prod-rwo. Laravel migrations run automatically via the `unit3d-migrate` init Job.
+Updating the ratatoskr-built image tag (e.g., from `v9.2.0` to `v9.3.0` when upstream UNIT3D releases a new minor version). Near-zero downtime on prod-rwx via the RollingUpdate strategy; brief Recreate-strategy downtime on prod-rwo. Helm creates a migration Job per revision. Kustomize requires explicitly replacing
+its static Job before each application upgrade, as described below.
 
 ### Step 1 — Pre-bump checklist
 
@@ -377,23 +385,43 @@ kustomize edit set image \
   ghcr.io/<operator>/unit3d=ghcr.io/<operator>/unit3d:v9.3.0
 ```
 
-Commit + push to the GitOps repo. ArgoCD picks the change up via auto-sync if the ApplicationSet is configured with `syncPolicy.automated.selfHeal: true`. Otherwise, trigger sync manually (`argocd app sync ratatoskr-prod-rwx`) or `kubectl apply -k`.
+### Step 3 — Run the new migration Job before starting workloads
 
-### Step 3 — Migration Job runs automatically
+Kustomize has no implicit hook ordering or wait semantics. A completed static Job
+is not rerun by `kubectl apply`; changing its Pod template also encounters immutable
+fields. Pause ArgoCD auto-sync/self-healing for this maintenance operation so it
+cannot undo the scale-down or race the Job replacement. The current ApplicationSet
+does not orchestrate application upgrades; automate this sequence explicitly before
+enabling unattended upgrades.
 
-The `unit3d-migrate` Job runs as part of the rollout (it has `helm.sh/hook: pre-install,pre-upgrade`-equivalent ordering via Kustomize wait semantics). Watch:
+After a backup, stop all application consumers and wait for their Pods to exit.
+Then remove the old Job and apply the updated overlay:
 
 ```bash
-kubectl get jobs -n unit3d -w
-kubectl logs -n unit3d job/unit3d-migrate -f
+kubectl scale -n unit3d deployment/unit3d-app deployment/unit3d-queue \
+  deployment/unit3d-scheduler --replicas=0
+kubectl wait -n unit3d --for=delete pod \
+  -l 'app.kubernetes.io/name in (unit3d-app,unit3d-queue,unit3d-scheduler)' --timeout=180s
+kubectl delete job -n unit3d unit3d-migrate --ignore-not-found --wait
+kubectl apply -k kustomize/overlays/prod-rwo
+kubectl wait -n unit3d --for=condition=complete job/unit3d-migrate --timeout=15m
+kubectl logs -n unit3d job/unit3d-migrate
 ```
 
-If the migrate Job fails (migration error, missing env, DB-credential mismatch post-bump), the workload Deployments will not roll because they wait on the Job's `Complete` condition. The old version stays running. Inspect logs, fix the issue (often a missing env var documented in the upstream release notes), re-trigger.
+Choose `prod-rwx` instead when that is the existing storage mode. The overlay
+restores the configured replica counts; each new Pod waits for the new migration
+Job before starting its application process. Keep the completed Job so later Pod
+restarts can also verify success. Re-enable GitOps reconciliation only after the
+rollout and database checks succeed.
 
-### Step 4 — Rollout completes via RollingUpdate
+### Step 4 — Verify the rollout
 
-- **prod-rwx**: zero-downtime per `strategy: RollingUpdate, maxSurge: 1, maxUnavailable: 0`. New pods come up before old pods terminate; PDB `minAvailable: 1` enforces the floor.
-- **prod-rwo**: brief downtime during the `Recreate` strategy. Old pod terminates, new pod starts, ~15-30 seconds of 502 from the ingress while the new pod boots.
+This maintenance sequence has downtime for both Kustomize storage modes. Helm's
+revision-specific Job supports RWX rolling deployments, provided the new migrations
+are compatible with the old running application. A migration failure blocks new
+Pods; it does not automatically roll back the database. Inspect retained Job logs,
+correct the cause, and retry, or restore a verified backup if required. Seeders run
+only at initial database creation, because several upstream seeders cannot be repeated.
 
 Verify the rollout completed:
 
