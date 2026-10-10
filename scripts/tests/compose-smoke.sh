@@ -31,6 +31,14 @@ docker stop --time=3 "$project-init" >/dev/null
 test "$(docker inspect --format '{{.State.ExitCode}}' "$project-init")" = 143
 docker rm "$project-init" >/dev/null
 echo LIFECYCLE_CANCELLATION_RESULT=PASS
+# Registry authentication/downloads can time out before any test container
+# exists. Retry only image acquisition, never a failed application startup.
+for attempt in 1 2 3; do
+    if "${compose[@]}" pull --policy missing --ignore-buildable; then break; fi
+    if [ "$attempt" = 3 ]; then exit 1; fi
+    echo "Image pull failed; retrying ($attempt/3)" >&2
+    sleep 5
+done
 "${compose[@]}" up -d --wait --wait-timeout 180
 "${compose[@]}" exec -T unit3d curl -fsS --max-time 10 -o /dev/null -w '%{http_code}\n' http://127.0.0.1/
 # A second run must preserve already seeded data instead of inserting duplicates.
