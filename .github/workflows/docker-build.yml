@@ -119,6 +119,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up QEMU
+        if: github.event_name != 'pull_request' || matrix.name == 'backup'
         uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
         with:
           platforms: linux/arm64
@@ -147,8 +148,9 @@ jobs:
 
       # First build: amd64 only, loaded into the local Docker daemon so Trivy
       # can scan it. Multi-platform builds cannot be `--load`ed; the second
-      # multi-arch build below hits the same gha cache and is therefore
-      # near-free. Splitting like this lets Trivy gate the push per cell.
+      # multi-arch publication build below reuses its amd64 layers.
+      # UNIT3D PRs validate arm64 in the native job below, avoiding slow
+      # emulation of the PHP and CGO compilers. Trivy gates publication.
       - name: Build for scan (linux/amd64, load locally)
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
@@ -173,9 +175,10 @@ jobs:
           vuln-type: os,library
           format: table
 
-      # Multi-arch build + push. PR runs build only (push=false) — same
-      # cache, validates the arm64 build path without publishing.
+      # Release builds publish the multi-platform manifest. Backup PRs keep
+      # their cross-compilation path; UNIT3D PRs use the native arm64 job.
       - name: Build & push (linux/amd64,linux/arm64)
+        if: github.event_name != 'pull_request' || matrix.name == 'backup'
         id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
@@ -205,3 +208,46 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           cosign sign --yes "${IMAGE}@${DIGEST}"
+
+  unit3d-arm64:
+    name: build (unit3d arm64)
+    if: github.event_name == 'pull_request'
+    needs: versions
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Build native arm64 image for scan
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: ratatoskr-scan:unit3d-arm64-${{ github.sha }}
+          build-args: UNIT3D_VERSION=${{ needs.versions.outputs.unit3d }}
+          cache-from: type=gha,scope=unit3d-arm64
+          cache-to: type=gha,mode=max,scope=unit3d-arm64
+
+      - name: Verify native runtime binaries
+        env:
+          IMAGE: ratatoskr-scan:unit3d-arm64-${{ github.sha }}
+        run: |
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = arm64
+          docker run --rm --entrypoint php "$IMAGE" --version
+          docker run --rm --entrypoint frankenphp "$IMAGE" version
+
+      - name: Trivy vulnerability scan (CRITICAL, HIGH)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ratatoskr-scan:unit3d-arm64-${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          format: table

@@ -74,3 +74,8 @@ Update both image digests together to preserve the PHP ABI. Inspect
 arm64. Remove the override only after a newer upstream image contains the fix
 and passes the same checks. Custom-build reference:
 [FrankenPHP Docker documentation](https://frankenphp.dev/docs/docker/).
+
+UNIT3D pull requests build and scan amd64 and arm64 on matching native runners.
+The arm64 job also executes PHP and FrankenPHP from the resulting image. This
+avoids lengthy QEMU compilation of PHP/CGO during review. Main/tag publication
+still builds the multi-platform manifest and signs it; PRs never publish images.
