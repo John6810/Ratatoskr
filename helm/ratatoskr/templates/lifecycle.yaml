@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-lifecycle
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+data:
+  lifecycle.php: |
+    {{- .Files.Get "files/lifecycle.php" | nindent 4 }}
+{{- if .Values.serviceAccount.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "ratatoskr.serviceAccountName" . }}
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+{{- end }}
+{{- if .Values.migrate.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-migration-wait
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    resourceNames: [{{ include "ratatoskr.migrate.fullname" . | quote }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-migration-wait
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "ratatoskr.fullname" . }}-migration-wait
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ratatoskr.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

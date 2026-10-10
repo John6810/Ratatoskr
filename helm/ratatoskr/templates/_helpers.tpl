@@ -73,6 +73,23 @@ identity). Per-component templates add `app.kubernetes.io/name:
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{/* Claim templates are immutable, including their labels. Preserve labels
+from older installs; use version-independent labels for a fresh StatefulSet. */}}
+{{- define "ratatoskr.claimLabels" -}}
+{{- $root := .root -}}
+{{- $name := include (printf "ratatoskr.%s.fullname" .name) $root -}}
+{{- $labels := dict "app.kubernetes.io/instance" $root.Release.Name "app.kubernetes.io/managed-by" $root.Release.Service "app.kubernetes.io/part-of" "ratatoskr" "app.kubernetes.io/name" .name "app.kubernetes.io/component" .component -}}
+{{- $existing := lookup "apps/v1" "StatefulSet" $root.Release.Namespace $name -}}
+{{- if $existing -}}
+  {{- range $claim := $existing.spec.volumeClaimTemplates -}}
+    {{- if eq $claim.metadata.name "data" -}}
+      {{- $labels = $claim.metadata.labels | default dict -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
 {{/*
 ServiceAccount name. If serviceAccount.create is true, returns the
 configured name (or the chart fullname if name empty). Otherwise
@@ -104,7 +121,7 @@ Match the resource names used in kustomize/base/<component>/.
 {{- end -}}
 
 {{- define "ratatoskr.migrate.fullname" -}}
-{{- printf "%s-unit3d-migrate" (include "ratatoskr.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-migrate-%d" (include "ratatoskr.fullname" . | trunc 43 | trimSuffix "-") .Release.Revision -}}
 {{- end -}}
 
 {{- define "ratatoskr.mariadb.fullname" -}}
@@ -123,7 +140,7 @@ Match the resource names used in kustomize/base/<component>/.
 unit3d image reference. Falls back to .Chart.AppVersion when tag is empty.
 */}}
 {{- define "ratatoskr.unit3d.image" -}}
-{{- $registry := .Values.unit3d.image.registry | default .Values.global.imageRegistry -}}
+{{- $registry := .Values.global.imageRegistry | default .Values.unit3d.image.registry -}}
 {{- $repository := .Values.unit3d.image.repository -}}
 {{- $tag := .Values.unit3d.image.tag | default .Chart.AppVersion -}}
 {{- if $registry -}}
@@ -139,7 +156,7 @@ global.imageRegistry override.
 Usage: {{ include "ratatoskr.image" (dict "image" .Values.mariadb.image "global" .Values.global) }}
 */}}
 {{- define "ratatoskr.image" -}}
-{{- $registry := .image.registry | default .global.imageRegistry -}}
+{{- $registry := .global.imageRegistry | default .image.registry -}}
 {{- $repository := .image.repository -}}
 {{- $tag := .image.tag -}}
 {{- if $registry -}}
@@ -335,43 +352,168 @@ generate APP_KEY into an operator-managed external Secret).
 {{- end -}}
 {{- end -}}
 
-{{/*
-Shared envFrom block for the four UNIT3D workloads (app, queue,
-scheduler, migrate). Renders configMapRef + 4 mandatory secretRefs
-(unit3d/db/redis/meili — chart-managed or operator-supplied per toggle)
-+ 1 optional secretRef for S3 storage credentials.
-
-Usage in a workload Deployment/Job:
-  envFrom:
-    {{- include "ratatoskr.unit3d.envFrom" . | nindent 12 }}
-*/}}
+{{/* Shared application configuration. Sensitive service credentials use explicit keys. */}}
 {{- define "ratatoskr.unit3d.envFrom" -}}
 - configMapRef:
     name: {{ include "ratatoskr.fullname" . }}-unit3d-config
 - secretRef:
     name: {{ include "ratatoskr.unit3d.secretName" . | quote }}
-{{- if .Values.mariadb.enabled }}
-- secretRef:
-    name: {{ include "ratatoskr.mariadb.secretName" . | quote }}
-{{- else }}
-- secretRef:
-    name: {{ required "unit3d.database.existingSecret is required when mariadb.enabled is false" .Values.unit3d.database.existingSecret | quote }}
+{{- end -}}
+
+{{- define "ratatoskr.unit3d.env" -}}
+- name: APP_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "ratatoskr.unit3d.secretName" . | quote }}
+      key: {{ include "ratatoskr.unit3d.appKeyKey" . | quote }}
+- name: DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      {{- if .Values.mariadb.enabled }}
+      name: {{ include "ratatoskr.mariadb.secretName" . | quote }}
+      key: {{ include "ratatoskr.mariadb.passwordKey" . | quote }}
+      {{- else }}
+      name: {{ required "unit3d.database.existingSecret is required" .Values.unit3d.database.existingSecret | quote }}
+      key: {{ .Values.unit3d.database.existingSecretPasswordKey | quote }}
+      {{- end }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      {{- if .Values.redis.enabled }}
+      name: {{ include "ratatoskr.redis.secretName" . | quote }}
+      key: {{ include "ratatoskr.redis.passwordKey" . | quote }}
+      {{- else }}
+      name: {{ required "unit3d.redis.existingSecret is required" .Values.unit3d.redis.existingSecret | quote }}
+      key: {{ .Values.unit3d.redis.existingSecretPasswordKey | quote }}
+      {{- end }}
+- name: MEILISEARCH_KEY
+  valueFrom:
+    secretKeyRef:
+      {{- if .Values.meilisearch.enabled }}
+      name: {{ include "ratatoskr.meilisearch.secretName" . | quote }}
+      key: {{ include "ratatoskr.meilisearch.masterKeyKey" . | quote }}
+      {{- else }}
+      name: {{ required "unit3d.meilisearch.existingSecret is required" .Values.unit3d.meilisearch.existingSecret | quote }}
+      key: {{ .Values.unit3d.meilisearch.existingSecretMasterKeyKey | quote }}
+      {{- end }}
+{{- if eq (include "ratatoskr.storage.s3Enabled" .) "true" }}
+{{- $root := . }}
+{{- range $disk := list "TORRENT_FILES" "SUBTITLE_FILES" "ATTACHMENT_FILES" }}
+- name: FILESYSTEM_{{ $disk }}_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "ratatoskr.storage.secretName" $root | quote }}
+      key: {{ if $root.Values.unit3d.storage.s3.existingSecret }}{{ $root.Values.unit3d.storage.s3.existingSecretKeyKey | quote }}{{ else }}FILESYSTEM_{{ $disk }}_KEY{{ end }}
+- name: FILESYSTEM_{{ $disk }}_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "ratatoskr.storage.secretName" $root | quote }}
+      key: {{ if $root.Values.unit3d.storage.s3.existingSecret }}{{ $root.Values.unit3d.storage.s3.existingSecretSecretKeyKey | quote }}{{ else }}FILESYSTEM_{{ $disk }}_SECRET{{ end }}
 {{- end }}
-{{- if .Values.redis.enabled }}
-- secretRef:
-    name: {{ include "ratatoskr.redis.secretName" . | quote }}
-{{- else }}
-- secretRef:
-    name: {{ required "unit3d.redis.existingSecret is required when redis.enabled is false" .Values.unit3d.redis.existingSecret | quote }}
 {{- end }}
-{{- if .Values.meilisearch.enabled }}
-- secretRef:
-    name: {{ include "ratatoskr.meilisearch.secretName" . | quote }}
-{{- else }}
-- secretRef:
-    name: {{ required "unit3d.meilisearch.existingSecret is required when meilisearch.enabled is false" .Values.unit3d.meilisearch.existingSecret | quote }}
+{{- end -}}
+
+{{/* A set-once hook is emitted only if its Secret does not exist. */}}
+{{- define "ratatoskr.secretMissing" -}}
+{{- $existing := lookup "v1" "Secret" .root.Release.Namespace .name -}}
+{{- if $existing -}}
+{{- if ne (dig "app.kubernetes.io/instance" "" ($existing.metadata.labels | default dict)) .root.Release.Name -}}
+{{- fail (printf "Secret %s belongs to another owner; use existingSecret explicitly" .name) -}}
+{{- end -}}
+{{- range $key := .keys -}}
+{{- if not (get ($existing.data | default dict) $key) -}}
+{{- fail (printf "Retained Secret %s is missing %s; recover it before upgrading" $.name $key) -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{- define "ratatoskr.validate" -}}
+{{- if le (int .Values.unit3d.frankenphp.threads) (int .Values.unit3d.frankenphp.workers) -}}
+{{- fail "unit3d.frankenphp.threads must exceed workers so FrankenPHP can start" -}}
+{{- end -}}
+{{- if .Values.ingress.enabled -}}
+{{- fail "ingress.enabled is not supported yet; supply ingress separately or set ingress.enabled=false" -}}
+{{- end -}}
+{{- if not .Values.storage.enabled -}}
+{{- fail "storage.enabled=false is unsupported: UNIT3D image disks still require a writable PVC" -}}
+{{- end -}}
+{{- if not (has .Values.storage.accessMode (list "ReadWriteOnce" "ReadWriteMany")) -}}
+{{- fail "storage.accessMode must be ReadWriteOnce or ReadWriteMany for shared UNIT3D storage" -}}
+{{- end -}}
+{{- range $entry := list (dict "name" "app" "enabled" true "replicas" .Values.unit3d.replicas "hpa" .Values.hpa.app "pdb" .Values.pdb.app) (dict "name" "queue" "enabled" .Values.queue.enabled "replicas" .Values.queue.replicas "hpa" .Values.hpa.queue "pdb" .Values.pdb.queue) -}}
+{{- if and (not $entry.enabled) (or $entry.hpa.enabled $entry.pdb.enabled) -}}{{ fail (printf "%s HPA/PDB requires its workload to be enabled" $entry.name) }}{{- end -}}
+{{- if and $entry.hpa.enabled (gt (int $entry.hpa.minReplicas) (int $entry.hpa.maxReplicas)) -}}{{ fail (printf "%s HPA minReplicas exceeds maxReplicas" $entry.name) }}{{- end -}}
+{{- if and (eq $.Values.storage.accessMode "ReadWriteOnce") (or (gt (int $entry.replicas) 1) (and $entry.hpa.enabled (gt (int $entry.hpa.maxReplicas) 1))) -}}
+{{- fail (printf "%s multi-replica/HPA scale-out requires storage.accessMode=ReadWriteMany" $entry.name) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.networkPolicies.enabled (or (not .Values.mariadb.enabled) (not .Values.redis.enabled) (not .Values.meilisearch.enabled)) (empty .Values.networkPolicies.extraEgress) -}}
+{{- fail "external services require networkPolicies.extraEgress rules, or networkPolicies.enabled=false" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Co-locate all consumers of the shared RWO PVC. The first pod matches itself. */}}
+{{- define "ratatoskr.storageAffinity" -}}
+{{- if eq .Values.storage.accessMode "ReadWriteOnce" }}
+affinity:
+  podAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            ratatoskr.io/storage: {{ include "ratatoskr.fullname" . | quote }}
+        topologyKey: kubernetes.io/hostname
 {{- end }}
-- secretRef:
-    name: {{ include "ratatoskr.storage.secretName" . | quote }}
-    optional: true
+{{- end -}}
+
+{{- define "ratatoskr.lifecycleVolumes" -}}
+- name: lifecycle
+  configMap:
+    name: {{ include "ratatoskr.fullname" . }}-lifecycle
+{{- if .Values.migrate.enabled }}
+- name: migration-api
+  projected:
+    sources:
+      - serviceAccountToken:
+          path: token
+          expirationSeconds: 3600
+      - configMap:
+          name: kube-root-ca.crt
+          items:
+            - key: ca.crt
+              path: ca.crt
+      - downwardAPI:
+          items:
+            - path: namespace
+              fieldRef:
+                fieldPath: metadata.namespace
+{{- end }}
+{{- end -}}
+
+{{- define "ratatoskr.workloadInit" -}}
+- name: wait-for-migration
+  image: {{ include "ratatoskr.unit3d.image" . | quote }}
+  imagePullPolicy: {{ .Values.unit3d.image.pullPolicy }}
+  command: ["php", "/opt/ratatoskr/lifecycle.php", {{ if .Values.migrate.enabled }}"wait"{{ else }}"storage"{{ end }}]
+  env:
+    - name: MIGRATION_JOB
+      value: {{ include "ratatoskr.migrate.fullname" . | quote }}
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+  securityContext:
+    {{- toYaml .Values.unit3d.containerSecurityContext | nindent 4 }}
+  volumeMounts:
+    - name: lifecycle
+      mountPath: /opt/ratatoskr
+      readOnly: true
+    - name: storage
+      mountPath: /app/storage
+    {{- if .Values.migrate.enabled }}
+    - name: migration-api
+      mountPath: /var/run/secrets/ratatoskr
+      readOnly: true
+    {{- end }}
 {{- end -}}

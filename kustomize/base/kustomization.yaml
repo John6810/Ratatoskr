@@ -30,6 +30,9 @@ labels:
 # all reference the same suffix-hashed ConfigMap name and roll together
 # when the PHP override changes — single source of truth, single rollout.
 configMapGenerator:
+  - name: unit3d-lifecycle
+    files:
+      - config/lifecycle.php
   - name: unit3d-filesystems-config
     files:
       - config/filesystems.php
@@ -46,3 +49,4 @@ resources:
   - unit3d-queue
   - unit3d-scheduler
   - networkpolicies
+  - lifecycle.yaml

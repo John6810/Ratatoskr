@@ -95,6 +95,10 @@ spec:
             - name: run
               mountPath: /run/mysqld
       volumes:
+        {{- if not .Values.mariadb.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
         - name: tmp
           emptyDir: {}
         - name: run
@@ -104,9 +108,7 @@ spec:
     - metadata:
         name: data
         labels:
-          {{- include "ratatoskr.labels" . | nindent 10 }}
-          app.kubernetes.io/component: database
-          app.kubernetes.io/name: mariadb
+          {{- include "ratatoskr.claimLabels" (dict "root" . "name" "mariadb" "component" "database") | nindent 10 }}
       spec:
         accessModes:
           - {{ .Values.mariadb.persistence.accessMode | quote }}

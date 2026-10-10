@@ -25,6 +25,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: unit3d-scheduler
+        ratatoskr.io/storage: unit3d
     spec:
       # Scheduler dispatches but does not process jobs itself; in-flight
       # scheduling is sub-second. 60s is generous for the artisan
@@ -35,6 +36,39 @@ spec:
         runAsUser: 33
         runAsGroup: 33
         fsGroup: 33
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  ratatoskr.io/storage: unit3d
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: unit3d-migration-wait
+      automountServiceAccountToken: false
+      initContainers:
+        - name: wait-for-migration
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          command: ["php", "/opt/ratatoskr/lifecycle.php", "wait"]
+          env:
+            - name: MIGRATION_JOB
+              value: unit3d-migrate
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: lifecycle
+              mountPath: /opt/ratatoskr
+              readOnly: true
+            - name: migration-api
+              mountPath: /var/run/secrets/ratatoskr
+              readOnly: true
+            - name: storage
+              mountPath: /app/storage
       containers:
         - name: unit3d-scheduler
           image: ghcr.io/john6810/unit3d:v9.2.0
@@ -67,6 +101,12 @@ spec:
                 optional: true
           # Lighter than the queue worker — scheduler dispatches, doesn't
           # process. Per .claude/rules/k8s.md baseline.
+          env:
+            - name: MEILISEARCH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: meilisearch-secrets
+                  key: MEILI_MASTER_KEY
           resources:
             requests:
               cpu: 50m
@@ -109,6 +149,25 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: lifecycle
+          configMap:
+            name: unit3d-lifecycle
+        - name: migration-api
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
         - name: filesystems-config
           configMap:
             name: unit3d-filesystems-config

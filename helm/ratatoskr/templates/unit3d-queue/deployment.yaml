@@ -9,9 +9,16 @@ metadata:
     app.kubernetes.io/component: {{ $component }}
     app.kubernetes.io/name: unit3d-queue
 spec:
-  replicas: {{ .Values.queue.replicas | default 1 }}
+  replicas: {{ .Values.queue.replicas }}
   strategy:
+    {{- if eq .Values.storage.accessMode "ReadWriteMany" }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    {{- else }}
     type: Recreate
+    {{- end }}
   selector:
     matchLabels:
       {{- include "ratatoskr.selectorLabels" . | nindent 6 }}
@@ -23,7 +30,10 @@ spec:
         {{- include "ratatoskr.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: {{ $component }}
         app.kubernetes.io/name: unit3d-queue
+        ratatoskr.io/storage: {{ include "ratatoskr.fullname" . | quote }}
+        ratatoskr.io/migration-wait: "true"
       annotations:
+        ratatoskr.io/migration: {{ include "ratatoskr.migrate.fullname" . | quote }}
         checksum/config: {{ include (print $.Template.BasePath "/unit3d-app/configmap.yaml") . | sha256sum }}
         checksum/filesystems: {{ include (print $.Template.BasePath "/unit3d-app/configmap-filesystems.yaml") . | sha256sum }}
     spec:
@@ -37,6 +47,11 @@ spec:
       terminationGracePeriodSeconds: 3600
       securityContext:
         {{- toYaml .Values.unit3d.podSecurityContext | nindent 8 }}
+      serviceAccountName: {{ include "ratatoskr.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- include "ratatoskr.storageAffinity" . | nindent 6 }}
+      initContainers:
+        {{- include "ratatoskr.workloadInit" . | nindent 8 }}
       containers:
         - name: unit3d-queue
           image: {{ include "ratatoskr.unit3d.image" . | quote }}
@@ -50,6 +65,8 @@ spec:
             - --sleep=3
           envFrom:
             {{- include "ratatoskr.unit3d.envFrom" . | nindent 12 }}
+          env:
+            {{- include "ratatoskr.unit3d.env" . | nindent 12 }}
           resources:
             {{- toYaml .Values.queue.resources | nindent 12 }}
           securityContext:
@@ -82,6 +99,7 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        {{- include "ratatoskr.lifecycleVolumes" . | nindent 8 }}
         - name: filesystems-config
           configMap:
             name: {{ include "ratatoskr.fullname" . }}-unit3d-filesystems-config

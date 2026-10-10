@@ -69,6 +69,12 @@ configMapGenerator:
 # PVC RWX. Patch order: ConfigMap first (no dependency), then workload
 # patches.
 patches:
+  - target:
+      kind: Deployment|Job
+      name: unit3d-(app|queue|scheduler|migrate)
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/affinity
   - path: patches/unit3d-config-prod.yaml
     target:
       kind: ConfigMap

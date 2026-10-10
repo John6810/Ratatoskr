@@ -83,14 +83,17 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+      {{- if not .Values.redis.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
   {{- if .Values.redis.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data
         labels:
-          {{- include "ratatoskr.labels" . | nindent 10 }}
-          app.kubernetes.io/component: cache
-          app.kubernetes.io/name: redis
+          {{- include "ratatoskr.claimLabels" (dict "root" . "name" "redis" "component" "cache") | nindent 10 }}
       spec:
         accessModes:
           - {{ .Values.redis.persistence.accessMode | quote }}

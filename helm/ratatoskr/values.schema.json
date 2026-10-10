@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ratatoskr Helm chart values",
-  "description": "Schema for ratatoskr v0.5.0-alpha.1 — production deployment stack for UNIT3D Community Edition.",
+  "description": "Schema for ratatoskr v0.5.0-alpha.3 — production deployment stack for UNIT3D Community Edition.",
   "type": "object",
   "additionalProperties": true,
   "required": ["unit3d", "mariadb", "redis", "meilisearch"],
@@ -13,10 +13,7 @@
         "registry": { "type": "string" },
         "repository": { "type": "string", "minLength": 1 },
         "tag": { "type": "string" },
-        "pullPolicy": {
-          "type": "string",
-          "enum": ["Always", "IfNotPresent", "Never"]
-        }
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
       },
       "required": ["repository"]
     },
@@ -47,10 +44,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "accessMode": {
-          "type": "string",
-          "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"]
-        },
+        "accessMode": { "type": "string", "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"] },
         "size": { "type": "string", "minLength": 1 },
         "storageClass": { "type": "string" }
       },
@@ -131,21 +125,16 @@
         "existingSecret": { "type": "string" },
         "existingSecretAppKeyKey": { "type": "string", "minLength": 1 },
         "appUrl": { "type": "string", "format": "uri" },
-        "appEnv": {
-          "type": "string",
-          "enum": ["production", "local", "testing", "staging"]
-        },
+        "appEnv": { "type": "string", "enum": ["production", "local", "testing", "staging"] },
         "appDebug": { "type": "boolean" },
-        "logLevel": {
-          "type": "string",
-          "enum": ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]
-        },
+        "logLevel": { "type": "string", "enum": ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"] },
         "trustedProxies": { "type": "string" },
         "replicas": { "type": "integer", "minimum": 0 },
         "resources": { "$ref": "#/definitions/resources" },
         "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
         "containerSecurityContext": { "type": "object", "additionalProperties": true },
         "probes": { "type": "object", "additionalProperties": true },
+        "lifecycle": { "type": "object", "additionalProperties": true },
         "database": {
           "type": "object",
           "additionalProperties": false,
@@ -219,6 +208,23 @@
               }
             }
           }
+        },
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "email": { "type": "string" },
+            "password": { "type": "string" }
+          }
+        },
+        "frankenphp": {
+          "type": "object",
+          "properties": {
+            "threads": { "type": "integer", "minimum": 2 },
+            "workers": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["threads", "workers"]
         }
       },
       "oneOf": [
@@ -273,7 +279,8 @@
       "additionalProperties": true,
       "properties": {
         "enabled": { "type": "boolean" },
-        "backoffLimit": { "type": "integer", "minimum": 0 }
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "timeoutSeconds": { "type": "integer", "minimum": 60 }
       }
     },
     "mariadb": {
@@ -297,34 +304,50 @@
             "existingSecretRootPasswordKey": { "type": "string", "minLength": 1 },
             "existingSecretPasswordKey": { "type": "string", "minLength": 1 },
             "existingSecretBackupPasswordKey": { "type": "string", "minLength": 1 }
-          },
-          "oneOf": [
-            {
-              "description": "Inline credentials path: rootPassword + password set, existingSecret empty.",
-              "properties": {
-                "rootPassword": { "type": "string", "minLength": 1 },
-                "password": { "type": "string", "minLength": 1 },
-                "existingSecret": { "type": "string", "maxLength": 0 }
-              },
-              "required": ["rootPassword", "password"]
-            },
-            {
-              "description": "External Secret path: existingSecret set, inline passwords empty.",
-              "properties": {
-                "rootPassword": { "type": "string", "maxLength": 0 },
-                "password": { "type": "string", "maxLength": 0 },
-                "existingSecret": { "type": "string", "minLength": 1 }
-              },
-              "required": ["existingSecret"]
-            }
-          ]
+          }
         },
         "persistence": { "$ref": "#/definitions/persistence" },
         "resources": { "$ref": "#/definitions/resources" },
         "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
         "containerSecurityContext": { "type": "object", "additionalProperties": true },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "properties": {
+              "auth": {
+                "oneOf": [
+                  {
+                    "description": "Inline credentials path: rootPassword + password set, existingSecret empty.",
+                    "properties": {
+                      "rootPassword": { "type": "string", "minLength": 1 },
+                      "password": { "type": "string", "minLength": 1 },
+                      "existingSecret": { "type": "string", "maxLength": 0 }
+                    },
+                    "required": ["rootPassword", "password"]
+                  },
+                  {
+                    "description": "External Secret path: existingSecret set, inline passwords empty.",
+                    "properties": {
+                      "rootPassword": { "type": "string", "maxLength": 0 },
+                      "password": { "type": "string", "maxLength": 0 },
+                      "existingSecret": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["existingSecret"]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "redis": {
       "type": "object",
@@ -340,31 +363,47 @@
             "password": { "type": "string" },
             "existingSecret": { "type": "string" },
             "existingSecretPasswordKey": { "type": "string", "minLength": 1 }
-          },
-          "oneOf": [
-            {
-              "description": "Inline credentials path: password set, existingSecret empty.",
-              "properties": {
-                "password": { "type": "string", "minLength": 1 },
-                "existingSecret": { "type": "string", "maxLength": 0 }
-              },
-              "required": ["password"]
-            },
-            {
-              "description": "External Secret path: existingSecret set, inline password empty.",
-              "properties": {
-                "password": { "type": "string", "maxLength": 0 },
-                "existingSecret": { "type": "string", "minLength": 1 }
-              },
-              "required": ["existingSecret"]
-            }
-          ]
+          }
         },
         "persistence": { "$ref": "#/definitions/persistence" },
         "resources": { "$ref": "#/definitions/resources" },
         "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
         "containerSecurityContext": { "type": "object", "additionalProperties": true }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          },
+          "then": {
+            "properties": {
+              "auth": {
+                "oneOf": [
+                  {
+                    "description": "Inline credentials path: password set, existingSecret empty.",
+                    "properties": {
+                      "password": { "type": "string", "minLength": 1 },
+                      "existingSecret": { "type": "string", "maxLength": 0 }
+                    },
+                    "required": ["password"]
+                  },
+                  {
+                    "description": "External Secret path: existingSecret set, inline password empty.",
+                    "properties": {
+                      "password": { "type": "string", "maxLength": 0 },
+                      "existingSecret": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["existingSecret"]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "meilisearch": {
       "type": "object",
@@ -375,32 +414,41 @@
         "masterKey": { "type": "string" },
         "existingSecret": { "type": "string" },
         "existingSecretMasterKeyKey": { "type": "string", "minLength": 1 },
-        "env": {
-          "type": "string",
-          "enum": ["production", "development"]
-        },
+        "env": { "type": "string", "enum": ["production", "development"] },
         "persistence": { "$ref": "#/definitions/persistence" },
         "experimentalMetrics": { "type": "boolean" },
         "resources": { "$ref": "#/definitions/resources" },
         "podSecurityContext": { "$ref": "#/definitions/podSecurityContext" },
         "containerSecurityContext": { "type": "object", "additionalProperties": true }
       },
-      "oneOf": [
+      "allOf": [
         {
-          "description": "Inline master key path: masterKey set (16+ bytes), existingSecret empty.",
-          "properties": {
-            "masterKey": { "type": "string", "minLength": 16 },
-            "existingSecret": { "type": "string", "maxLength": 0 }
+          "if": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
           },
-          "required": ["masterKey"]
-        },
-        {
-          "description": "External Secret path: existingSecret set, inline masterKey empty.",
-          "properties": {
-            "masterKey": { "type": "string", "maxLength": 0 },
-            "existingSecret": { "type": "string", "minLength": 1 }
-          },
-          "required": ["existingSecret"]
+          "then": {
+            "oneOf": [
+              {
+                "description": "Inline master key path: masterKey set (16+ bytes), existingSecret empty.",
+                "properties": {
+                  "masterKey": { "type": "string", "minLength": 16 },
+                  "existingSecret": { "type": "string", "maxLength": 0 }
+                },
+                "required": ["masterKey"]
+              },
+              {
+                "description": "External Secret path: existingSecret set, inline masterKey empty.",
+                "properties": {
+                  "masterKey": { "type": "string", "maxLength": 0 },
+                  "existingSecret": { "type": "string", "minLength": 1 }
+                },
+                "required": ["existingSecret"]
+              }
+            ]
+          }
         }
       ]
     },
@@ -409,10 +457,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "accessMode": {
-          "type": "string",
-          "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"]
-        },
+        "accessMode": { "type": "string", "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"] },
         "size": { "type": "string", "minLength": 1 },
         "storageClass": { "type": "string" }
       }
@@ -422,10 +467,7 @@
       "additionalProperties": true,
       "properties": {
         "enabled": { "type": "boolean" },
-        "mode": {
-          "type": "string",
-          "enum": ["traefik", "gateway-api", "none"]
-        },
+        "mode": { "type": "string", "enum": ["traefik", "gateway-api", "none"] },
         "className": { "type": "string" },
         "hosts": {
           "type": "array",
@@ -447,10 +489,7 @@
                   "required": ["name", "kind"],
                   "properties": {
                     "name": { "type": "string", "minLength": 1 },
-                    "kind": {
-                      "type": "string",
-                      "enum": ["Issuer", "ClusterIssuer"]
-                    }
+                    "kind": { "type": "string", "enum": ["Issuer", "ClusterIssuer"] }
                   }
                 }
               }
@@ -473,7 +512,10 @@
       "properties": {
         "create": { "type": "boolean" },
         "name": { "type": "string" },
-        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
       }
     },
     "pdb": {

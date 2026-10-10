@@ -5,6 +5,10 @@
 #
 # Excluded from `helm package` via .helmignore (ci/ is omitted).
 unit3d:
+  owner:
+    name: admin
+    email: admin@example.invalid
+    password: CHANGEME
   appKey: "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   bootstrapAppKey: false
   existingSecret: ""

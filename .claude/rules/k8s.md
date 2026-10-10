@@ -66,7 +66,7 @@ Document expected resources in values/configmap, never hardcode without a value 
 
 ## Workload patterns
 
-- **Migrations as a `Job` (Kustomize) or pre-install hook (Helm)**, never the entrypoint of the app pod. Use `helm.sh/hook: pre-install,pre-upgrade` and `helm.sh/hook-weight` for ordering.
+- **Migrations as an ordinary `Job`**, never the app entrypoint. Helm uses a revision-specific Job and application init gates; Kustomize requires explicit replacement of its static Job on upgrade. Keep completion evidence for Pod restarts. See ADR-0007; pre-install migration hooks cannot depend on ordinary release resources.
 - **Scheduler is a `CronJob`** with schedule `* * * * *` running `php artisan schedule:run`. Concurrency policy `Forbid` to avoid overlap.
 - **Queue workers are a separate `Deployment`** — distinct image command, distinct HPA. Co-locating workers in the app pod is rejected.
 - **Reverb is its own `Deployment` + `Service` on port 8080.** Sticky sessions (Traefik annotation or session affinity) on the Service.

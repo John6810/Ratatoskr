@@ -1,0 +1,35 @@
+# Rendering fixture; every endpoint and Secret is a placeholder.
+mariadb:
+  enabled: false
+  auth:
+    rootPassword: ""
+    password: ""
+redis:
+  enabled: false
+  auth:
+    password: ""
+meilisearch:
+  enabled: false
+  masterKey: ""
+unit3d:
+  database:
+    host: db.example.invalid
+    existingSecret: external-db
+    existingSecretPasswordKey: password
+  redis:
+    host: redis.example.invalid
+    existingSecret: external-redis
+    existingSecretPasswordKey: password
+  meilisearch:
+    host: search.example.invalid
+    existingSecret: external-search
+    existingSecretMasterKeyKey: key
+networkPolicies:
+  extraEgress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.0/24
+      ports:
+        - {protocol: TCP, port: 3306}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 7700}
