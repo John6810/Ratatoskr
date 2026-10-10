@@ -86,16 +86,32 @@ CSI/CNI, ingress, S3 backends, load, and dependency freshness remain separate
 checks. The HTTP sample above measures a local redirect during rollout, not
 authenticated application throughput or a production availability guarantee.
 
-### Remote security findings
+### Security dependency qualification
 
 The first remote Trivy scan reported 15 HIGH findings in UNIT3D v9.2.0's
 Composer dependencies and one in FrankenPHP's bundled `golang.org/x/net`.
-These dependencies come from the upstream application lockfile and base image;
-deployment lifecycle tests do not establish that they are safe. The scanner
-continues to block image publication. UNIT3D v9.2.0 is still the latest published
-release as of 2026-10-10. Resolving those findings requires an upstream-supported
-dependency update and another runtime qualification; this PR does not silently
-replace the application's lockfile or add scan exceptions.
+The application now uses a reviewed, checked-in Composer lock within the
+unchanged upstream manifest's version constraints. Seventeen runtime packages
+were updated, including Laravel 12, Guzzle, CommonMark, Symfony, Livewire and
+PsySH. Composer's production audit reports no advisories. The Docker build
+verifies both original upstream Composer files before applying the maintained
+lock and checks PHP platform requirements. UNIT3D v9.2.0 is still the latest
+source release as of 2026-10-10.
+
+FrankenPHP 1.13.0 is rebuilt from the official builder's sources and original
+module set with `golang.org/x/net` 0.60.0. Builder and runtime are pinned by
+multi-platform digest to the same PHP ABI. The resulting local image passes
+the existing Trivy gate: zero fixable HIGH/CRITICAL findings, with no new
+exceptions or relaxed policy. A full scan without `--ignore-unfixed` still
+reports Debian findings without a fixed distribution version (82 HIGH and
+9 CRITICAL package/advisory occurrences on 2026-10-10). A passing CI gate is
+not a claim that the image has zero vulnerabilities; these distribution
+findings require continued assessment and upstream fixes.
+
+See [the dependency maintenance procedure](../docker/security/README.md).
+Compose now also exercises owner login, session persistence, CSRF rejection,
+and a real Livewire search update. PR checks remain the source of truth for
+remote image scans, both architectures, and complete lifecycle qualification.
 
 The backup image's source-build dependency overrides now include gRPC 1.83.2,
 x/net 0.60.0, x/crypto 0.57.0, and x/text 0.42.0 in response to its scan findings.
@@ -104,8 +120,8 @@ application startup and functional assertions are never retried to mask failures
 
 ### Next work, in order
 
-1. Resolve the upstream application/base-image security findings and require
-   passing PR checks before publication. Qualify the lifecycle suite on the
+1. Require passing PR checks before publication and follow distribution
+   advisories without available fixes. Qualify the lifecycle suite on the
    intended production CNI, including API-server and external-service egress.
 2. Repeat the multi-node RWX suites with the production CSI drivers on disposable
    data, including dynamic provisioning and retained-volume rollback. Measure
@@ -122,7 +138,7 @@ planning targets, not benchmark results.
 
 ## Principles
 
-- **Vanilla UNIT3D, never forked.** ratatoskr packages and deploys upstream UNIT3D. We do not ship a modified application image. If a feature is needed, we ask upstream first.
+- **Upstream UNIT3D source, maintained security dependencies.** Ratatoskr packages upstream application code with a reviewed Composer lock within its existing constraints. Runtime dependency overrides are documented and tested; application feature changes go upstream first.
 - **Multi-level honesty.** Compose / K3s / K8s prod / IaC must all stay coherent. A decision at level 1 (named volumes, no `:latest`, etc.) carries through to level 4. No "different stack at scale".
 - **Production-grade from day one.** Supply chain security (Cosign, SBOM, provenance), real backups (mariabackup + Restic, not naive volume snapshots), pinned versions, atomic commits.
 - **Infrastructure only.** ratatoskr is dual-use deployment tooling. Operators are responsible for what they distribute. See [DISCLAIMER.md](../DISCLAIMER.md).

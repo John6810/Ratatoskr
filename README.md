@@ -23,6 +23,10 @@ A modern, opinionated deployment stack for [UNIT3D Community Edition](https://gi
 - 🔄 **GitOps-ready** — ArgoCD `ApplicationSet` template provided
 - 🛡️ **Production hardening** — NetworkPolicies, PDB, HPA, SealedSecrets
 
+The image keeps upstream UNIT3D application source and carries reviewed
+[security dependency updates](docker/security/README.md), checked by Composer
+audit and Trivy before publication.
+
 ---
 
 ## 🚀 Quick start
