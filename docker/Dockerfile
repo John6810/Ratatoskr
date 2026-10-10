@@ -3,16 +3,30 @@
 # Build context MUST be the repo root so `COPY docker/Caddyfile` resolves:
 #   docker build -f docker/Dockerfile -t ratatoskr/unit3d:dev .
 #
-# Pinned floating tags. For reproducible release builds, append a digest:
-#   FROM dunglas/frankenphp:1-php8.4@sha256:<digest> AS ...
-ARG FRANKENPHP_VERSION=1-php8.4
+# Keep builder and runtime on the same FrankenPHP/PHP release and ABI.
+ARG FRANKENPHP_VERSION=1.13.0-php8.4@sha256:e9a56d27e7f0c30bb1ad122dfee024a014081c4501782be65424b57016f3104a
+ARG FRANKENPHP_BUILDER_VERSION=1.13.0-builder-php8.4@sha256:1b02c625717f2e4d1f4bc6a063879883020e0b316f488e1ebe7fc9e6d3f30e98
 ARG UNIT3D_VERSION=v9.2.0
+
+# Rebuild the official Caddy/FrankenPHP module set with the HTTP/2 security
+# fix. The pinned builder contains the upstream source, Go locks and libphp.
+# Use its own build wrapper to preserve CGO flags and PHP ABI on both arches.
+FROM dunglas/frankenphp:${FRANKENPHP_BUILDER_VERSION} AS frankenphp-builder
+WORKDIR /go/src/app/caddy
+RUN go get golang.org/x/net@v0.60.0 \
+    && go mod verify
+WORKDIR /go/src/app/caddy/frankenphp
+RUN GOBIN=/usr/local/bin ../../go.sh install \
+        -ldflags "-w -s -X 'github.com/caddyserver/caddy/v2.CustomVersion=FrankenPHP v1.13.0 PHP $PHP_VERSION Caddy' -X 'github.com/caddyserver/caddy/v2.CustomBinaryName=frankenphp' -X 'github.com/caddyserver/caddy/v2/modules/caddyhttp.ServerHeader=FrankenPHP Caddy'" \
+        -buildvcs=false \
+    && frankenphp version \
+    && frankenphp build-info
 
 # =============================================================================
 # Stage 1 — builder: fetch UNIT3D, install Composer + Bun deps, build assets.
 # Holds compilers, git, composer, bun. Never reaches the runtime image.
 # =============================================================================
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS builder
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS php-toolchain
 
 ARG UNIT3D_VERSION
 
@@ -47,15 +61,28 @@ RUN curl -fsSL https://bun.sh/install | bash \
 
 WORKDIR /build
 
+FROM php-toolchain AS builder
+ARG UNIT3D_VERSION
+
 # Pinned UNIT3D source. Tag drives the image — never hardcoded in the URL.
 RUN git clone --depth 1 --branch "${UNIT3D_VERSION}" \
         https://github.com/HDInnovations/UNIT3D.git .
+
+# Security-maintained lock, resolved within upstream composer.json constraints.
+# Reject a changed upstream manifest/lock or an unqualified UNIT3D version.
+# Ordinary builds install this reviewed lock; they never resolve newer packages.
+COPY docker/security/${UNIT3D_VERSION}/ /tmp/unit3d-security/
+RUN sha256sum --check /tmp/unit3d-security/upstream.sha256 \
+    && cp /tmp/unit3d-security/composer.lock composer.lock \
+    && rm -rf /tmp/unit3d-security
 
 # --no-scripts skips Laravel's package:discover post-autoload-dump hook, which
 # boots the framework and chokes on env-driven config (e.g. parse_url(env('APP_URL'))
 # in config/secure-headers.php) when no .env is present at build time.
 # package:discover runs at first artisan invocation inside unit3d-migrate.
-RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction --prefer-dist
+RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction --prefer-dist \
+    && composer check-platform-reqs --no-dev \
+    && composer audit --locked --no-dev
 
 # FrankenPHP worker mode needs a worker entrypoint that calls
 # frankenphp_handle_request() in a loop — stock public/index.php doesn't.
@@ -128,6 +155,10 @@ RUN apt-get purge -y --auto-remove linux-libc-dev 2>/dev/null || true
 
 # Production php.ini (opcache enabled, sane memory_limit, no display_errors).
 RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+
+COPY --from=frankenphp-builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
+# COPY does not retain file capabilities; restore the official image's setting.
+RUN setcap cap_net_bind_service=+ep /usr/local/bin/frankenphp
 
 WORKDIR /app
 

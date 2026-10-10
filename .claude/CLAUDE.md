@@ -19,13 +19,18 @@
 | Layer | Choice | Pin |
 |---|---|---|
 | Application | UNIT3D | `v9.2.0` |
-| Runtime | FrankenPHP worker mode | `1-php8.4` |
+| Runtime | FrankenPHP worker mode | `1.13.0-php8.4`, digest-pinned, x/net `0.60.0` rebuild |
 | Database | MariaDB | `11` |
 | Cache / queues / broadcast | Redis | `7` |
 | Search | MeiliSearch | latest stable (verify) |
 | Broadcasting | Laravel broadcast, Redis driver | bundled (`BROADCAST_CONNECTION=redis`) |
 
 Mismatches between this file and reality have happened. Run the `check-upstream-versions` skill before pinning anything new, and update code + this table in the same commit.
+
+UNIT3D application source stays upstream. Security updates within its Composer
+constraints are maintained in `docker/security/<UNIT3D_VERSION>/composer.lock`;
+see `docker/security/README.md`. Do not restore a vulnerable upstream lock or
+remove the audits to make a build pass.
 
 **No WebSocket server.** UNIT3D v9.2.0 does not bundle Reverb (or Soketi, or any WebSocket broker) — verified against `composer.json`, `config/broadcasting.php`, `package.json`, and `.env.example` at the v9.2.0 tag. Server-side broadcasting works through Redis pub/sub for queue jobs and inter-process events; there is no browser-facing WS path for live chat or presence in the vanilla install. Real-time UI is upstream's responsibility — if a future UNIT3D release adopts Reverb (or anything else), ratatoskr will add the matching service and update this table in the same commit.
 

@@ -109,8 +109,8 @@ For UNIT3D specifically, check the release notes for database migration requirem
 
 - **GitHub API rate limit**: 60/h unauthenticated, 5000/h with `gh auth login`. If rate-limited, fall back to `WebFetch` on the public release page.
 - **MeiliSearch GitHub releases mix `latest` and `enterprise` tags**: filter on the `latest` tag, not the `enterprise-*` tags.
-- **FrankenPHP image tag vs. binary version**: the Docker tag `1-php8.4` is a floating tag tracking the latest 1.x with PHP 8.4. The repo pins the floating tag; the binary version reported by upstream is more granular. Both being current means: report ✅ and mention that a rebuild pulls the latest.
-- **Laravel version is controlled by UNIT3D upstream**, not by this repo. Do not propose bumping Laravel independently.
+- **FrankenPHP image tag vs. binary version**: the repository pins matching builder/runtime tags and multi-platform digests, then rebuilds the binary with documented security dependencies. Verify both base digests and `frankenphp build-info`; a rebuild alone does not update pinned bases.
+- **Laravel constraints are controlled by UNIT3D upstream.** Compatible security updates are maintained in `docker/security/<UNIT3D_VERSION>/composer.lock` according to `docker/security/README.md`. Do not change upstream constraints or introduce an independent major upgrade.
 - **`endoflife.date` is the right source for MariaDB/Redis/PHP** because Docker Hub tags lie (`latest` floats unpredictably). Verify the cycle is still supported (`eol` field in the future).
 - **Never propose downgrades**, even if the repo pins a version newer than what `endoflife.date` lists as `latest` (it lags by a few days).
 

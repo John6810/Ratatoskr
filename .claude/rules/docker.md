@@ -12,7 +12,7 @@ applies-to:
 ## Image build
 
 - **Multi-stage builds only.** A `builder` stage that holds composer + bun + git, and a `runtime` stage that holds only what the app needs at runtime. Single-stage Dockerfiles for this project are rejected.
-- **Pin the base image with a tag, not `:latest`.** `dunglas/frankenphp:1-php8.4` is the floating tag we accept (rebuilds get latest 1.x with PHP 8.4). For reproducible release builds, append a digest pin `@sha256:...`.
+- **Pin the base image with a tag and digest, never `:latest`.** FrankenPHP builder and runtime must match the same release and PHP ABI. Update both pins together and preserve the documented security dependency rebuild.
 - **`UNIT3D_VERSION` exposed as a build ARG**, default to the current target (`v9.2.0`). Never hardcode it inside `RUN git clone`.
 - **`composer install --no-dev --optimize-autoloader --no-interaction`** in the builder stage — never the runtime stage. The runtime never sees composer.
 - **`bun install --frozen-lockfile`** then `bun run build`. Never `bun install` without the flag (silent lockfile drift).
