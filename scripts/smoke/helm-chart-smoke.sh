@@ -39,6 +39,7 @@
 #   INSTALL_TIMEOUT    10m
 #   APP_URL            http://localhost:8080
 #   KEEP_NAMESPACE     0 — set 1 to skip cleanup (debug / inspection)
+#   UNIT3D_TEST_IMAGE  optional repository:tag for a locally built test image
 #   APP_KEY            auto-generated via openssl rand if unset
 #   MARIADB_ROOT_PW    auto-generated via openssl rand if unset
 #   MARIADB_USER_PW    auto-generated via openssl rand if unset
@@ -89,6 +90,10 @@ VERIFY_FAILED=0
 
 # Track which phase ran for the EXIT trap
 PHASE="preflight"
+NAMESPACE_CREATED=0
+NAMESPACE_UID=""
+WORK_DIR=""
+pf_pid=""
 
 # ============================================================================
 # Logging
@@ -123,20 +128,45 @@ fail() {
 # ============================================================================
 # Cleanup trap — runs on every exit, idempotent, gated by KEEP_NAMESPACE
 # ============================================================================
+finish() {
+    if [ "$1" -eq 0 ]; then
+        printf 'SMOKE_RESULT=PASS\n'
+    else
+        printf 'SMOKE_RESULT=FAIL\n'
+    fi
+    exit "$1"
+}
+
 cleanup() {
     rc=$?
+    trap - EXIT
+    if [ -n "$pf_pid" ]; then
+        kill "$pf_pid" 2>/dev/null || true
+        wait "$pf_pid" 2>/dev/null || true
+    fi
+    if [ -n "$WORK_DIR" ]; then
+        rm -rf "$WORK_DIR"
+    fi
+    # Preflight failures and failed creates never confer ownership.
+    if [ "$NAMESPACE_CREATED" != "1" ]; then
+        finish "$rc"
+    fi
 
     if [ "$KEEP_NAMESPACE" = "1" ]; then
         warn "KEEP_NAMESPACE=1 — skipping cleanup (exit_phase=$PHASE rc=$rc)"
         warn "Manual teardown:"
         warn "  helm uninstall $RELEASE -n $NAMESPACE --wait --timeout=5m || true"
         warn "  kubectl delete namespace $NAMESPACE --wait=true --timeout=5m"
-        return "$rc"
+        finish "$rc"
     fi
 
-    # Only run cleanup if the namespace actually exists.
-    if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
-        return "$rc"
+    current_uid="$(kubectl get namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
+    if [ -z "$current_uid" ]; then
+        finish "$rc"
+    fi
+    if [ -z "$NAMESPACE_UID" ] || [ "$current_uid" != "$NAMESPACE_UID" ]; then
+        err "namespace identity changed; refusing cleanup"
+        finish 40
     fi
 
     banner "CLEANUP — helm uninstall + namespace delete (exit_phase=$PHASE rc=$rc)"
@@ -164,7 +194,7 @@ cleanup() {
     fi
 
     log "cleanup complete (rc=$rc)"
-    return "$rc"
+    finish "$rc"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
@@ -296,10 +326,12 @@ install() {
     banner "INSTALL — namespace + helm install (timeout $INSTALL_TIMEOUT)"
 
     # 20: namespace
-    if ! kubectl create namespace "$NAMESPACE" >/dev/null; then
+    if ! NAMESPACE_UID="$(kubectl create namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}')"; then
         err "kubectl create namespace failed"
         exit 20
     fi
+    NAMESPACE_CREATED=1
+    WORK_DIR="$(mktemp -d -t ratatoskr-smoke-XXXXXX)"
     log "20/ namespace '$NAMESPACE' created"
 
     # 21: secrets — generate if not provided
@@ -320,10 +352,19 @@ install() {
     log "    MEILI_KEY hash:      $(printf '%s' "$MEILI_KEY" | openssl sha256 | awk '{print $2}')"
 
     # 22: helm install
+    set --
+    if [ -n "${UNIT3D_TEST_IMAGE:-}" ]; then
+        set -- --set-string "unit3d.image.registry=" \
+            --set-string "unit3d.image.repository=${UNIT3D_TEST_IMAGE%:*}" \
+            --set-string "unit3d.image.tag=${UNIT3D_TEST_IMAGE##*:}"
+    fi
     log "22/ helm install $RELEASE -n $NAMESPACE --wait --timeout=$INSTALL_TIMEOUT"
     if ! helm install "$RELEASE" "$CHART_PATH" \
             -n "$NAMESPACE" \
-            --wait --timeout="$INSTALL_TIMEOUT" \
+            --wait --wait-for-jobs --timeout="$INSTALL_TIMEOUT" \
+            --set "fullnameOverride=$RELEASE" \
+            --set "unit3d.owner.email=smoke@example.invalid" \
+            --set "unit3d.owner.password=$MARIADB_USER_PW" \
             --set "unit3d.appKey=$APP_KEY" \
             --set "unit3d.appUrl=$APP_URL" \
             --set "mariadb.auth.rootPassword=$MARIADB_ROOT_PW" \
@@ -331,7 +372,7 @@ install() {
             --set "redis.auth.password=$REDIS_PW" \
             --set "meilisearch.masterKey=$MEILI_KEY" \
             --set "global.storageClass=$STORAGE_CLASS" \
-            --set "ingress.enabled=false"; then
+            --set "ingress.enabled=false" "$@"; then
         err "helm install failed or timed out"
         err "--- pods at failure ---"
         kubectl -n "$NAMESPACE" get pods 2>&1 | sed 's/^/    /' >&2
@@ -397,11 +438,14 @@ verify() {
 
     # 33: migrate Job Complete + log shows migrations ran
     log "33/ migrate Job Complete + log inspection"
-    job_status="$(kubectl -n "$NAMESPACE" get job "$RELEASE-unit3d-migrate" \
+    migration_job="$(kubectl -n "$NAMESPACE" get jobs \
+        -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/name=unit3d-migrate" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+    job_status="$(kubectl -n "$NAMESPACE" get job "$migration_job" \
         -o jsonpath='{.status.succeeded}' 2>/dev/null || echo 0)"
     if [ "${job_status:-0}" -ge 1 ]; then
         # Check the log contains migration evidence
-        if kubectl -n "$NAMESPACE" logs "job/$RELEASE-unit3d-migrate" 2>/dev/null \
+        if kubectl -n "$NAMESPACE" logs "job/$migration_job" 2>/dev/null \
                 | grep -q -i "migrat"; then
             pass "migrate Job Complete (logs show migration activity)"
         else
@@ -409,26 +453,26 @@ verify() {
         fi
     else
         fail "migrate Job not Complete (succeeded=$job_status)"
-        kubectl -n "$NAMESPACE" logs "job/$RELEASE-unit3d-migrate" 2>&1 \
+        kubectl -n "$NAMESPACE" logs "job/$migration_job" 2>&1 \
             | tail -20 | sed 's/^/    /'
     fi
 
     # 34: migrate:status from app pod
     log "34/ migrate:status from unit3d-app"
     if kubectl -n "$NAMESPACE" exec "deploy/$RELEASE-unit3d-app" -- \
-            php /app/artisan migrate:status >/tmp/migrate-status.txt 2>&1; then
-        ran_count="$(grep -c -E 'Ran|Yes' /tmp/migrate-status.txt || true)"
+            php /app/artisan migrate:status >"$WORK_DIR/migrate-status.txt" 2>&1; then
+        ran_count="$(grep -c -E 'Ran|Yes' "$WORK_DIR/migrate-status.txt" || true)"
         if [ "${ran_count:-0}" -ge 1 ]; then
             pass "migrate:status reports $ran_count migrations applied"
         else
             fail "migrate:status returned no Ran/Yes entries"
-            tail -5 /tmp/migrate-status.txt | sed 's/^/    /'
+            tail -5 "$WORK_DIR/migrate-status.txt" | sed 's/^/    /'
         fi
     else
         fail "migrate:status exec failed"
-        tail -5 /tmp/migrate-status.txt 2>/dev/null | sed 's/^/    /'
+        tail -5 "$WORK_DIR/migrate-status.txt" 2>/dev/null | sed 's/^/    /'
     fi
-    rm -f /tmp/migrate-status.txt
+    rm -f "$WORK_DIR/migrate-status.txt"
 
     # 35: redis ping
     log "35/ redis-cli ping (auth-aware)"
@@ -454,16 +498,25 @@ verify() {
 
     # 37: HTTP probe via port-forward
     log "37/ HTTP probe unit3d-app via port-forward"
-    pf_log=/tmp/smoke-pf.log
-    kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-unit3d-app" 18080:80 \
+    pf_log="$WORK_DIR/port-forward.log"
+    kubectl -n "$NAMESPACE" port-forward --address=127.0.0.1 "svc/$RELEASE-unit3d-app" :80 \
         >"$pf_log" 2>&1 &
     pf_pid=$!
-    # Wait for port-forward to bind
-    sleep 5
+    # Read the allocated port; never accidentally probe an unrelated server.
+    port=""
+    attempt=0
+    while [ "$attempt" -lt 20 ]; do
+        port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) ->.*/\1/p' "$pf_log" | head -1)"
+        [ -z "$port" ] || break
+        kill -0 "$pf_pid" 2>/dev/null || break
+        sleep 1
+        attempt=$((attempt + 1))
+    done
     code="$(curl -s -o /dev/null -w '%{http_code}' \
-        --max-time 10 http://127.0.0.1:18080 || echo 000)"
+        --max-time 10 "http://127.0.0.1:${port:-0}/" || echo 000)"
     kill "$pf_pid" 2>/dev/null || true
     wait "$pf_pid" 2>/dev/null || true
+    pf_pid=""
     rm -f "$pf_log"
     case "$code" in
         200|302)
@@ -516,10 +569,8 @@ main() {
     banner "SMOKE TEST RESULT"
     if [ "$VERIFY_FAILED" -eq 0 ]; then
         log "PASS — all 9 verifications green (elapsed ${elapsed}s)"
-        printf 'SMOKE_RESULT=PASS\n'
     else
         err "FAIL — $VERIFY_FAILED check(s) failed (elapsed ${elapsed}s)"
-        printf 'SMOKE_RESULT=FAIL\n'
     fi
     # cleanup runs via EXIT trap regardless
 }
