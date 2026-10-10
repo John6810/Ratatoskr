@@ -65,7 +65,7 @@ Design and operating constraints: [ADR-0007](./adr/0007-deployment-lifecycle.md)
 | Helm smoke script | All nine checks pass; final PASS after namespace cleanup |
 | Kustomize dev on disposable Kind | Fresh install, actual APP_KEY generation, repeat bootstrap preserves key, HTTP 302, authenticated Scout synchronization |
 | Physical backup/restore drill | Real MariaDB → mariadb-backup → zstd → encrypted Restic → prepare/copy-back → temporary DB queries; forced replacement preserves originals |
-| CI | New deployment-and-recovery workflow defines static, Compose, Helm/Kustomize lifecycle, multi-node NFS CSI, smoke, and backup/restore jobs; remote Actions execution requires a push |
+| CI | Published on [draft PR #5](https://github.com/John6810/Ratatoskr/pull/5). The first remote run passed static validation and physical backup/restore. Current lifecycle and image-scan results are recorded in the PR checks. |
 
 Local validation uses Helm 3.16.4, Kustomize 5.8.3, kubeconform 0.8.0, and
 Kubernetes 1.32.0 schemas. Helm lifecycle, Kustomize bootstrap, and smoke tests
@@ -76,19 +76,36 @@ modified. Kind enforces NetworkPolicy; lifecycle API access and explicitly allow
 external-service traffic are exercised.
 
 The local RWX tests use precreated NFS PVs. Downloads of NFS CSI images failed
-with registry TLS/timeouts, so dynamic provisioning remains unverified. NFS 4.0
+with registry TLS/timeouts, so that local run did not validate dynamic provisioning. NFS 4.0
 avoids a confirmed Ganesha/Linux 6.19+ directory-delegation incompatibility without
 changing host kernel parameters; see the [test guide](../scripts/tests/README.md).
-The fresh-cluster wrapper also needs an end-to-end CI run: creating a second
-concurrent three-node Kind cluster failed during node startup, before any tests.
-The individual RWX suites run against the existing local cluster. Production
+The fresh-cluster wrapper runs in CI. Locally, creating a second concurrent
+three-node Kind cluster failed during node startup, before any tests, so the
+individual RWX suites ran against the existing local cluster. Production
 CSI/CNI, ingress, S3 backends, load, and dependency freshness remain separate
 checks. The HTTP sample above measures a local redirect during rollout, not
 authenticated application throughput or a production availability guarantee.
 
+### Remote security findings
+
+The first remote Trivy scan reported 15 HIGH findings in UNIT3D v9.2.0's
+Composer dependencies and one in FrankenPHP's bundled `golang.org/x/net`.
+These dependencies come from the upstream application lockfile and base image;
+deployment lifecycle tests do not establish that they are safe. The scanner
+continues to block image publication. UNIT3D v9.2.0 is still the latest published
+release as of 2026-10-10. Resolving those findings requires an upstream-supported
+dependency update and another runtime qualification; this PR does not silently
+replace the application's lockfile or add scan exceptions.
+
+The backup image's source-build dependency overrides now include gRPC 1.83.2,
+x/net 0.60.0, x/crypto 0.57.0, and x/text 0.42.0 in response to its scan findings.
+Compose tests retry image acquisition up to three times after a registry timeout;
+application startup and functional assertions are never retried to mask failures.
+
 ### Next work, in order
 
-1. Run the new CI on the 1.32 baseline and qualify the lifecycle suite on the
+1. Resolve the upstream application/base-image security findings and require
+   passing PR checks before publication. Qualify the lifecycle suite on the
    intended production CNI, including API-server and external-service egress.
 2. Repeat the multi-node RWX suites with the production CSI drivers on disposable
    data, including dynamic provisioning and retained-volume rollback. Measure
@@ -199,7 +216,7 @@ Implemented:
 
 Still required before beta/publication:
 
-- Run the new CI remotely and close the production CNI/CSI checks above.
+- Close the remaining CI security and production CNI/CSI checks above.
 - Implement ingress templates and Gateway API/Traefik parity (ADR-0006).
 - Port the opt-in KEDA scaler and enforce mutual exclusion with queue HPA.
 - Publish the chart and Artifact Hub metadata after release gates pass.
