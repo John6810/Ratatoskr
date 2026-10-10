@@ -34,8 +34,8 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS restic-builder
 ARG RESTIC_GIT_TAG=v0.18.1
 ARG RESTIC_GIT_COMMIT=7d0aa7f2e30546fba7c8f1c0bae4d6704e3d8423
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 # CGO_ENABLED=0 produces a fully static binary that does not depend on the
 # runtime image's libc — robust across any glibc version drift in the

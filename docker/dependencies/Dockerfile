@@ -6,8 +6,8 @@ ARG REDIS_IMAGE=redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571
 ARG MEILI_IMAGE=getmeili/meilisearch:v1.43@sha256:4407d9f9a4a5b8ef2e382827782b3dd6e0ecf8f2832ecb0344601691c13da149
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS gosu-builder
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 RUN git clone --depth 1 --branch 1.19 https://github.com/tianon/gosu.git . \
     && test "$(git rev-parse HEAD)" = 6456aaa0f3c854d199d0f037f068eb97515b7513 \
