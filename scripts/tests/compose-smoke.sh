@@ -41,5 +41,6 @@ for attempt in 1 2 3; do
 done
 "${compose[@]}" up -d --wait --wait-timeout 180
 "${compose[@]}" exec -T unit3d curl -fsS --max-time 10 -o /dev/null -w '%{http_code}\n' http://127.0.0.1/
+python3 scripts/tests/http-session.py "http://$("${compose[@]}" port unit3d 80)"
 # A second run must preserve already seeded data instead of inserting duplicates.
 "${compose[@]}" run --rm --no-deps unit3d-migrate

@@ -7,7 +7,7 @@ and install Python 3 with PyYAML, Docker, kubectl, and jq.
 | Command | Coverage |
 |---|---|
 | `bash scripts/tests/validate.sh` | Regression tests, shell syntax, strict Helm lint, rendered Kubernetes and CRD schemas |
-| `bash scripts/tests/compose-smoke.sh` | Compose startup, HTTP, repeat migrations, init cancellation |
+| `bash scripts/tests/compose-smoke.sh` | Compose startup, owner login/session, CSRF rejection, Livewire search, repeat migrations, init cancellation |
 | `bash scripts/tests/backup-restore-drill.sh` | Physical MariaDB backup, encrypted Restic storage, restore and retained originals |
 | `bash scripts/tests/helm-lifecycle.sh` | Install, chart-version upgrade, stable keys/data, failed migration, recovery, external services |
 | `bash scripts/tests/kustomize-smoke.sh` | Kustomize startup and APP_KEY bootstrap stability |
