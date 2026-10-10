@@ -63,11 +63,15 @@ RUN set -eux; \
 #
 #   github.com/go-jose/go-jose/v4 4.0.5 -> 4.1.4   CVE-2026-34986 (DoS via crafted JWE)
 #   go.opentelemetry.io/otel/sdk  1.36  -> 1.43.0  CVE-2026-24051, CVE-2026-39883 (PATH hijacking)
-#   google.golang.org/grpc        1.74  -> 1.79.3  CVE-2026-33186 (authz HTTP/2 path bypass)
+#   google.golang.org/grpc        1.74  -> 1.83.2  CVE-2026-33186, CVE-2026-84304, CVE-2026-84445
+#   golang.org/x/net             0.48  -> 0.60.0  CVE-2026-78669 and earlier HTTP/2 fixes
+#   golang.org/x/crypto          0.46  -> 0.57.0  SSH fixes through CVE-2026-56854
+#   golang.org/x/text            0.32  -> 0.42.0  CVE-2026-56852; matches x/net's requirements
 RUN set -eux; \
     go get github.com/go-jose/go-jose/v4@v4.1.4; \
     go get go.opentelemetry.io/otel/sdk@v1.43.0; \
-    go get google.golang.org/grpc@v1.79.3; \
+    go get google.golang.org/grpc@v1.83.2 \
+        golang.org/x/net@v0.60.0 golang.org/x/crypto@v0.57.0 golang.org/x/text@v0.42.0; \
     go mod tidy
 
 # -trimpath strips host filesystem paths from the binary (reproducibility).
