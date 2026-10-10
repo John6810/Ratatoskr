@@ -9,7 +9,9 @@ init Job ordering, runtime probes, end-to-end HTTP.
 ## helm-chart-smoke.sh
 
 End-to-end install of the ratatoskr Helm chart against a real Kubernetes
-cluster, with progressive verification and unconditional teardown.
+cluster, with progressive verification and teardown restricted to the namespace
+created by this invocation. Cleanup verifies the namespace UID; pre-existing or
+concurrently replaced namespaces are left untouched. PASS is printed after cleanup.
 
 ### Scope
 
@@ -48,6 +50,7 @@ None. All defaults work for a kame-style cluster with `csi-rawfile`.
 | `STORAGE_CLASS` | `csi-rawfile` | StorageClass for all PVCs |
 | `INSTALL_TIMEOUT` | `10m` | `helm install --timeout` |
 | `APP_URL` | `http://localhost:8080` | UNIT3D `APP_URL` env |
+| `UNIT3D_TEST_IMAGE` | chart default | Optional repository:tag of a test image |
 | `KEEP_NAMESPACE` | `0` | Set `1` to skip cleanup (debug / inspection) |
 | `APP_KEY` | auto-generated | Laravel `APP_KEY` (`base64:…` form) |
 | `MARIADB_ROOT_PW` | auto-generated | MariaDB root password |

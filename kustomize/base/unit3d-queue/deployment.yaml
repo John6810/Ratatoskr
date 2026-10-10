@@ -17,6 +17,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: unit3d-queue
+        ratatoskr.io/storage: unit3d
     spec:
       # Long grace window for in-flight queue jobs to finish before SIGKILL.
       # Paired with --max-time=3600 below so worker processes self-cycle
@@ -27,10 +28,44 @@ spec:
       # unit3d-app and unit3d-migrate). fsGroup 33 makes the shared
       # unit3d-storage PVC mount group-writable.
       securityContext:
+        seccompProfile: {type: RuntimeDefault}
         runAsNonRoot: true
         runAsUser: 33
         runAsGroup: 33
         fsGroup: 33
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  ratatoskr.io/storage: unit3d
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: unit3d-migration-wait
+      automountServiceAccountToken: false
+      initContainers:
+        - name: wait-for-migration
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          command: ["php", "/opt/ratatoskr/lifecycle.php", "wait"]
+          env:
+            - name: MIGRATION_JOB
+              value: unit3d-migrate
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: lifecycle
+              mountPath: /opt/ratatoskr
+              readOnly: true
+            - name: migration-api
+              mountPath: /var/run/secrets/ratatoskr
+              readOnly: true
+            - name: storage
+              mountPath: /app/storage
       containers:
         - name: unit3d-queue
           image: ghcr.io/john6810/unit3d:v9.2.0
@@ -54,14 +89,25 @@ spec:
             - secretRef:
                 name: unit3d-secrets
             - secretRef:
-                name: mariadb-secrets
-            - secretRef:
                 name: redis-secrets
             - secretRef:
                 name: meilisearch-secrets
             - secretRef:
                 name: unit3d-storage-secrets
                 optional: true
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secrets
+                  key: DB_PASSWORD
+            - name: DEFAULT_OWNER_PASSWORD
+              value: ""
+            - name: MEILISEARCH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: meilisearch-secrets
+                  key: MEILI_MASTER_KEY
           resources:
             requests:
               cpu: 100m
@@ -119,6 +165,25 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: lifecycle
+          configMap:
+            name: unit3d-lifecycle
+        - name: migration-api
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
         - name: filesystems-config
           configMap:
             name: unit3d-filesystems-config

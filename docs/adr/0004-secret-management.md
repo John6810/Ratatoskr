@@ -146,3 +146,12 @@ Both paths converge on the same invariant: **`APP_KEY` is generated exactly once
 
 - `docs: create docs/upstream-prs.md skeleton` — landed in commit `ff67743`. Tracks the upstream PR work (Storage-aware controller refactor for v0.4) referenced from ADR-0002. Add a `key:rotate` entry to that file when/if Laravel ships a primitive (re-evaluate at Laravel major bumps).
 - `docs(roadmap): align v0.3/v0.4 wording with ADR-0002 + ADR-0003` — landed in commit `e9be51d`. ROADMAP already covers the secret management framing implicitly via the v0.3 K8s overlay description; no separate ROADMAP entry for secrets needed.
+
+## Amendment — deployment lifecycle (2026-10-10)
+
+[ADR-0007](./0007-deployment-lifecycle.md) supersedes the Helm bootstrap Job and
+repeated `migrate --seed` details above. Helm generates APP_KEY when creating the
+first Secret and uses cluster-side lookup to preserve it on upgrades. Kustomize
+retains its API-based bootstrap Job. Application seeders run only when initializing
+a database, with a durable incomplete-seed guard. Offline Helm GitOps rendering
+requires operator-managed existing Secrets for every component.

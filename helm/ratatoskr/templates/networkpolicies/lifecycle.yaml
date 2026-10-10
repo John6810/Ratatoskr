@@ -1,0 +1,79 @@
+{{- if .Values.networkPolicies.enabled }}
+{{- if .Values.migrate.enabled }}
+{{- $cidrs := .Values.networkPolicies.apiServerCIDRs | default list }}
+{{- if empty $cidrs }}
+{{- $service := lookup "v1" "Service" "default" "kubernetes" | default dict }}
+{{- range (dig "spec" "clusterIPs" list $service) }}
+{{- $cidrs = append $cidrs (printf "%s/%s" . (ternary "128" "32" (contains ":" .))) }}
+{{- end }}
+{{- $endpoints := lookup "v1" "Endpoints" "default" "kubernetes" | default dict }}
+{{- range ($endpoints.subsets | default list) }}
+{{- range .addresses }}
+{{- $cidrs = append $cidrs (printf "%s/%s" .ip (ternary "128" "32" (contains ":" .ip))) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Offline renders cannot discover API addresses. Never allow all destinations. */}}
+{{- if empty $cidrs }}{{- $cidrs = list "127.0.0.1/32" }}{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-migration-api
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ratatoskr.io/migration-wait: "true"
+  policyTypes: [Egress]
+  egress:
+    # Include the service and post-DNAT API ports; CNI processing order varies.
+    - to:
+        {{- range ($cidrs | uniq) }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicies.apiServerPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+{{- end }}
+{{- with .Values.networkPolicies.extraEgress }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ratatoskr.fullname" $ }}-external-egress
+  labels:
+    {{- include "ratatoskr.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [app, worker, scheduler, migration]
+  policyTypes: [Egress]
+  egress:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.networkPolicies.extraIngress }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ratatoskr.fullname" $ }}-extra-ingress
+  labels:
+    {{- include "ratatoskr.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}

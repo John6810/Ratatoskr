@@ -1,11 +1,12 @@
-ratatoskr v{{ .Chart.Version }} (alpha scaffolding) —
-UNIT3D {{ .Chart.AppVersion }}.
+ratatoskr {{ .Chart.Version }} — UNIT3D {{ .Chart.AppVersion }} (alpha).
 
-Templates not yet implemented at v0.5.0-alpha.1. The chart structure
-and values schema are in place; full templates land in v0.5.0-beta.1.
+Application startup waits for the current migration Job to succeed.
+Inspect: kubectl -n {{ .Release.Namespace }} logs job/{{ include "ratatoskr.migrate.fullname" . }}
+Verify:  helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs
 
-In the meantime, deploy via Kustomize:
+Chart-managed Secrets persist across upgrades and uninstall. Changed inline
+credentials do not rotate existing Secrets; keep APP_KEY with your backups.
 
-  kubectl apply -k https://github.com/John6810/Ratatoskr/kustomize/overlays/prod-rwo
-
-Documentation: https://github.com/John6810/Ratatoskr/tree/main/docs
+Ingress is operator-managed. Configuration, external services, credential
+rotation, and GitOps requirements: helm/ratatoskr/README.md.
+Release gates and verification limits: docs/ROADMAP.md.

@@ -18,6 +18,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: unit3d-app
+        ratatoskr.io/storage: unit3d
     spec:
       # Generous grace for in-flight HTTP requests to drain. FrankenPHP's
       # worker mode handles SIGTERM by finishing the current request batch
@@ -29,14 +30,52 @@ spec:
       # exposing ports. fsGroup 33 makes the unit3d-storage PVC mount
       # group-writable for the same user.
       securityContext:
+        seccompProfile: {type: RuntimeDefault}
         runAsNonRoot: true
         runAsUser: 33
         runAsGroup: 33
         fsGroup: 33
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "80"
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  ratatoskr.io/storage: unit3d
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: unit3d-migration-wait
+      automountServiceAccountToken: false
+      initContainers:
+        - name: wait-for-migration
+          image: ghcr.io/john6810/unit3d:v9.2.0
+          command: ["php", "/opt/ratatoskr/lifecycle.php", "wait"]
+          env:
+            - name: MIGRATION_JOB
+              value: unit3d-migrate
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: lifecycle
+              mountPath: /opt/ratatoskr
+              readOnly: true
+            - name: migration-api
+              mountPath: /var/run/secrets/ratatoskr
+              readOnly: true
+            - name: storage
+              mountPath: /app/storage
       containers:
         - name: unit3d-app
           image: ghcr.io/john6810/unit3d:v9.2.0
           imagePullPolicy: IfNotPresent
+          args: ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
           ports:
             - name: http
               containerPort: 80
@@ -53,14 +92,25 @@ spec:
             - secretRef:
                 name: unit3d-secrets
             - secretRef:
-                name: mariadb-secrets
-            - secretRef:
                 name: redis-secrets
             - secretRef:
                 name: meilisearch-secrets
             - secretRef:
                 name: unit3d-storage-secrets
                 optional: true
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secrets
+                  key: DB_PASSWORD
+            - name: DEFAULT_OWNER_PASSWORD
+              value: ""
+            - name: MEILISEARCH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: meilisearch-secrets
+                  key: MEILI_MASTER_KEY
           resources:
             requests:
               cpu: 250m
@@ -72,34 +122,31 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
+              add:
+                - NET_BIND_SERVICE
               drop:
                 - ALL
-          # FrankenPHP serves UNIT3D on port 80; Compose stack uses curl on /
-          # which returns 200 (authenticated views) or 302 (anonymous redirect
-          # to /login). K8s httpGet treats any 2xx/3xx as healthy, so the
-          # same shape works without curl in the container.
-          #
-          # startupProbe: 30 × 5s = 150s max for cold-start (composer
-          # autoload + opcache warm + first FrankenPHP worker boot). Once it
-          # succeeds, liveness and readiness kick in.
+          # Do not follow the redirect to /login: Kubernetes HTTP probes
+          # would hit its rate limit and cause false health failures.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
           startupProbe:
-            httpGet:
-              path: /
-              port: http
+            exec:
+              command: [curl, --fail, --silent, --show-error, --max-time, "4", --output, /dev/null, "http://127.0.0.1/"]
             periodSeconds: 5
             timeoutSeconds: 4
             failureThreshold: 30
           livenessProbe:
-            httpGet:
-              path: /
-              port: http
+            exec:
+              command: [curl, --fail, --silent, --show-error, --max-time, "4", --output, /dev/null, "http://127.0.0.1/"]
             periodSeconds: 30
             timeoutSeconds: 4
             failureThreshold: 3
           readinessProbe:
-            httpGet:
-              path: /
-              port: http
+            exec:
+              command: [curl, --fail, --silent, --show-error, --max-time, "4", --output, /dev/null, "http://127.0.0.1/"]
             periodSeconds: 30
             timeoutSeconds: 4
             failureThreshold: 3
@@ -133,6 +180,25 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: lifecycle
+          configMap:
+            name: unit3d-lifecycle
+        - name: migration-api
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace
         - name: filesystems-config
           configMap:
             name: unit3d-filesystems-config

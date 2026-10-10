@@ -1,5 +1,13 @@
 # `kustomize/overlays/prod-rwo/`
 
+Deployment commands below run from the repository root and require Python 3
+with PyYAML plus an explicit `KUBECONFIG` (or `KUBECTL_CONTEXT`). The apply helper
+resolves the API Service and endpoint IPs before applying restrictive egress;
+rendered Secrets stay in memory. For offline GitOps, patch the
+`unit3d-migration-api` NetworkPolicy with those exact CIDRs yourself. Its default
+loopback placeholder deliberately blocks API access. See the
+[security guide](../../../docs/security-hardening.md).
+
 Production overlay for clusters **without** an RWX storage class. Single-replica `unit3d-app` / `unit3d-queue` / `unit3d-scheduler`, `strategy: Recreate`, RWO PVC for both `unit3d-storage` (image disks per [ADR-0002](../../../docs/adr/0002-storage-strategy-unit3d-storage.md)) and the StatefulSets (mariadb, redis, meilisearch). Ingress via the [`ingress-traefik`](../../components/ingress-traefik/) Component.
 
 For multi-replica HA prod with RWX storage, KEDA queue-length autoscaling, and HPA: see `kustomize/overlays/prod-rwx/` (separate overlay, separate commit).
@@ -55,7 +63,7 @@ Step-by-step for a fresh cluster deploy:
 
 7. **Apply:**
    ```bash
-   kubectl apply -k kustomize/overlays/prod-rwo/
+   python3 scripts/security/apply-kustomize.py kustomize/overlays/prod-rwo/
    ```
 
 The bootstrap chain runs in this order: `unit3d-migrate` Job (migrate + seed + scout-sync) → `unit3d-app` Deployment becomes Ready → IngressRoute starts serving once cert-manager populates the `unit3d-tls` Secret.

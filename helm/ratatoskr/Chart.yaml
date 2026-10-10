@@ -13,7 +13,7 @@ description: >-
   private BitTorrent tracker. Bundles MariaDB, Redis, MeiliSearch, and the
   UNIT3D application via FrankenPHP.
 type: application
-version: 0.5.0-alpha.1
+version: 0.5.0-alpha.4
 appVersion: "v9.2.0"
 kubeVersion: ">=1.30.0-0"
 keywords:

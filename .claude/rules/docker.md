@@ -12,13 +12,14 @@ applies-to:
 ## Image build
 
 - **Multi-stage builds only.** A `builder` stage that holds composer + bun + git, and a `runtime` stage that holds only what the app needs at runtime. Single-stage Dockerfiles for this project are rejected.
-- **Pin the base image with a tag, not `:latest`.** `dunglas/frankenphp:1-php8.4` is the floating tag we accept (rebuilds get latest 1.x with PHP 8.4). For reproducible release builds, append a digest pin `@sha256:...`.
+- **Pin the base image with a tag and digest, never `:latest`.** FrankenPHP builder and runtime must match the same release and PHP ABI. Update both pins together and preserve the documented security dependency rebuild.
 - **`UNIT3D_VERSION` exposed as a build ARG**, default to the current target (`v9.2.0`). Never hardcode it inside `RUN git clone`.
 - **`composer install --no-dev --optimize-autoloader --no-interaction`** in the builder stage — never the runtime stage. The runtime never sees composer.
 - **`bun install --frozen-lockfile`** then `bun run build`. Never `bun install` without the flag (silent lockfile drift).
 - **Required PHP extensions**: `pdo_mysql`, `redis`, `intl`, `bcmath`, `gd`, `zip`, `exif`, `opcache`, `pcntl`, `sodium`. Install via FrankenPHP's `install-php-extensions` helper.
 - **`apt-get install` always with `--no-install-recommends`** and followed by `rm -rf /var/lib/apt/lists/*` in the same `RUN` to keep the layer clean.
-- **`COPY --chown=www-data:www-data`** when copying app files into the runtime stage. Never `COPY` then `RUN chown` (extra layer, root-owned files briefly).
+- **Application source and Caddy configuration remain root-owned.** Use `COPY --chown=root:root`; grant UID 33 ownership only on storage/cache and Caddy writable directories. The application must not be able to modify executable source.
+- **Separate migration tooling.** The `migration` target retains the MariaDB CLI needed by schema imports; the final `runtime` target removes the CLI and its libraries. Keep both images on the same UNIT3D source and maintained Composer lock.
 - **Permissions on `storage/` and `bootstrap/cache/`** must be writable by the FrankenPHP user. The Dockerfile sets this; do not rely on volume-time chown at runtime.
 
 ## Image surface

@@ -14,6 +14,8 @@ metadata:
 # duplicating the data.
 data:
   APP_ENV: production
+  FRANKENPHP_NUM_THREADS: "4"
+  FRANKENPHP_NUM_WORKERS: "2"
   APP_DEBUG: "false"
   # APP_URL is overridden per overlay (dev keeps localhost, prod points
   # at the operator's tracker domain). Base ships a safe default that

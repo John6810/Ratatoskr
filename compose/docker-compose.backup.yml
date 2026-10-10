@@ -40,12 +40,13 @@ services:
     build:
       context: ..
       dockerfile: docker/backup/Dockerfile
-      args:
-        MARIADB_VERSION: ${MARIADB_BACKUP_VERSION:-11.8}
     profiles: [backup]
     # One-shot semantics: run a single backup or restore command and exit.
     # Cron / systemd timer on the host re-invokes; we never want a crash loop.
     restart: "no"
+    networks: [application, backend]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     env_file: .env.backup
     environment:
       # Service hostname inside the compose network. The backup script

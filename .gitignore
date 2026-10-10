@@ -7,6 +7,9 @@
 .env.local
 .env.production
 .env.development
+.env.backup
+private-values.yaml
+*.private.yaml
 
 # TLS / SSH keys
 *.pem
@@ -34,3 +37,9 @@ kubeconfig.*
 Thumbs.db
 *.swp
 *.swo
+
+# Python validation cache
+__pycache__/
+
+# Private local deployments, credentials, and test reports
+.local/

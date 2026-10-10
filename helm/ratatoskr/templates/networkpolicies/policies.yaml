@@ -1,12 +1,12 @@
 {{- if .Values.networkPolicies.enabled }}
 {{- /*
-8 NetworkPolicies in dependency order, ported verbatim from
+NetworkPolicies in dependency order, adapted from
 kustomize/base/networkpolicies/. Default-deny first; without it the
 other policies are decorative (additive allow on a permit-everything
 baseline). Egress allows for DNS and 443 are required for any
 namespace running pods that need DNS resolution or external HTTPS.
 */}}
-# 00 — default-deny ingress + egress for the entire namespace
+# 00 — default-deny ingress + egress for this release
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -15,7 +15,9 @@ metadata:
     {{- include "ratatoskr.labels" . | nindent 4 }}
     app.kubernetes.io/component: networkpolicy
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes:
     - Ingress
     - Egress
@@ -29,7 +31,9 @@ metadata:
     {{- include "ratatoskr.labels" . | nindent 4 }}
     app.kubernetes.io/component: networkpolicy
 spec:
-  podSelector: {}
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
   policyTypes:
     - Egress
   egress:
@@ -37,6 +41,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
@@ -53,6 +60,8 @@ metadata:
     app.kubernetes.io/component: networkpolicy
 spec:
   podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
@@ -63,6 +72,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/name: mariadb
       ports:
         - protocol: TCP
@@ -70,6 +80,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/name: redis
       ports:
         - protocol: TCP
@@ -77,6 +88,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/name: meilisearch
       ports:
         - protocol: TCP
@@ -93,18 +105,22 @@ metadata:
 spec:
   podSelector:
     matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/name: mariadb
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
                 values: [app, worker, scheduler, migration]
         - podSelector:
             matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: backup
       ports:
         - protocol: TCP
@@ -121,12 +137,15 @@ metadata:
 spec:
   podSelector:
     matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/name: redis
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
@@ -146,12 +165,15 @@ metadata:
 spec:
   podSelector:
     matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/name: meilisearch
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
@@ -159,6 +181,7 @@ spec:
       ports:
         - protocol: TCP
           port: 7700
+{{- if .Values.networkPolicies.allowPublicHTTPS }}
 ---
 # 20 — UNIT3D egress on TCP 443 to public internet (S3, OAuth, SMTP API)
 apiVersion: networking.k8s.io/v1
@@ -170,6 +193,8 @@ metadata:
     app.kubernetes.io/component: networkpolicy
 spec:
   podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
@@ -188,6 +213,7 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+{{- end }}
 ---
 # 30 — Ingress to unit3d-app from labeled ingress controller namespace
 apiVersion: networking.k8s.io/v1
@@ -200,6 +226,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/name: unit3d-app
   policyTypes:
     - Ingress

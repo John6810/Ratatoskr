@@ -2,6 +2,11 @@
 
 ArgoCD `ApplicationSet` template for ratatoskr deployments. **Reference template — operators customize in their fork.** Closes the v0.3 [ROADMAP](../docs/ROADMAP.md) "ArgoCD ApplicationSet template for GitOps adoption" item.
 
+Application upgrades require the explicit [migration sequence](../docs/upgrade-guide.md#step-3--run-the-new-migration-job-before-starting-workloads).
+A completed Kustomize Job does not rerun on sync, and its Pod template is immutable.
+Pause auto-sync/self-healing during that sequence. This ApplicationSet provides
+reconciliation, not migration orchestration; unattended upgrades are not supported.
+
 ## Prerequisites
 
 - **ArgoCD installed in the cluster** — operator-managed, see <https://argo-cd.readthedocs.io/en/stable/getting_started/>. ratatoskr does not bundle ArgoCD; it's cluster-wide infrastructure like cert-manager and sealed-secrets.
@@ -88,7 +93,7 @@ See <https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Gen
 
 ## Notes
 
-- **Namespace override** — the ApplicationSet's `kustomize.namespace` field overrides the namespace defined in each overlay's `kustomization.yaml` (which is `unit3d` per [CLAUDE.md](../CLAUDE.md) K8s naming convention). This allows multiple overlays in one cluster without collision. Operators on a single overlay can drop the override and use the overlay's native namespace by removing both `kustomize.namespace` from the source spec AND setting `destination.namespace: unit3d`.
+- **Namespace override** — the ApplicationSet's `kustomize.namespace` field overrides the namespace defined in each overlay's `kustomization.yaml` (which is `unit3d` per [CLAUDE.md](../.claude/CLAUDE.md) K8s naming convention). This allows multiple overlays in one cluster without collision. Operators on a single overlay can drop the override and use the overlay's native namespace by removing both `kustomize.namespace` from the source spec AND setting `destination.namespace: unit3d`.
 - **`CreateNamespace=true`** — ArgoCD creates the destination namespace if missing. Required for first deploy; benign no-op afterward.
 - **`ServerSideApply=true`** — avoids client-side merge conflicts on CRDs (cert-manager `Certificate`, Traefik `IngressRoute`, KEDA `ScaledObject`, sealed-secrets `SealedSecret`). Recommended for any ratatoskr deployment because the overlay tree composes multiple CRD-defining components.
 - **Retry policy** — 5 retries with exponential backoff up to 5 min. Recovers from transient errors during initial sync (CRDs not yet installed by the time ArgoCD tries to create resources, network blips, rate-limited registry pulls).

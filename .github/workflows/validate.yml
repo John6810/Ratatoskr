@@ -1,0 +1,122 @@
+name: deployment-and-recovery
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  source-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Scan tracked source for exposed secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '1'
+          hide-progress: true
+  manifests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+          bash scripts/tests/install-tools.sh "$RUNNER_TEMP/ratatoskr-bin"
+          echo "$RUNNER_TEMP/ratatoskr-bin" >> "$GITHUB_PATH"
+      - name: Regression tests and manifest validation
+        run: bash scripts/tests/validate.sh
+  helm-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+          bash scripts/tests/install-tools.sh "$RUNNER_TEMP/ratatoskr-bin"
+          echo "$RUNNER_TEMP/ratatoskr-bin" >> "$GITHUB_PATH"
+      - name: Build security-maintained dependencies
+        run: bash scripts/tests/build-dependencies.sh
+      - name: Build current application image
+        run: |
+          docker buildx build --load --platform linux/amd64 --provenance=false -f docker/Dockerfile --target migration -t ratatoskr/unit3d:lifecycle-migration -t ratatoskr/unit3d:dev-migration .
+          docker buildx build --load --platform linux/amd64 --provenance=false -f docker/Dockerfile -t ratatoskr/unit3d:lifecycle -t ratatoskr/unit3d:dev .
+      - name: Compose startup and migration retry
+        run: bash scripts/tests/compose-smoke.sh
+      - name: Create disposable cluster
+        run: |
+          kind create cluster --name ratatoskr-ci --kubeconfig "$RUNNER_TEMP/kubeconfig" --wait 120s \
+            --image kindest/node:v1.32.0@sha256:c48c62eac5da28cdadcf560d1d8616cfa6783b58f0d94cf63ad1bf49600cb027
+          kind load docker-image ratatoskr/unit3d:lifecycle ratatoskr/unit3d:lifecycle-migration --name ratatoskr-ci
+          for component in mariadb redis meilisearch; do
+            kind load docker-image "ghcr.io/john6810/ratatoskr-$component:security-20261010" --name ratatoskr-ci
+          done
+      - name: Install, upgrade, migration failure, recovery
+        env:
+          UNIT3D_TEST_IMAGE: ratatoskr/unit3d:lifecycle
+        run: KUBECONFIG="$RUNNER_TEMP/kubeconfig" bash scripts/tests/helm-lifecycle.sh
+      - name: Smoke script success and cleanup
+        env:
+          UNIT3D_TEST_IMAGE: ratatoskr/unit3d:lifecycle
+          STORAGE_CLASS: standard
+        run: KUBECONFIG="$RUNNER_TEMP/kubeconfig" sh scripts/smoke/helm-chart-smoke.sh
+      - name: Kustomize install and APP_KEY bootstrap
+        env:
+          UNIT3D_TEST_IMAGE: ratatoskr/unit3d:lifecycle
+        run: KUBECONFIG="$RUNNER_TEMP/kubeconfig" bash scripts/tests/kustomize-smoke.sh
+      - name: Delete disposable cluster
+        if: always()
+        run: kind delete cluster --name ratatoskr-ci
+  rwx-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml jq
+          bash scripts/tests/install-tools.sh "$RUNNER_TEMP/ratatoskr-bin"
+          echo "$RUNNER_TEMP/ratatoskr-bin" >> "$GITHUB_PATH"
+      - name: Build security-maintained dependencies
+        run: bash scripts/tests/build-dependencies.sh
+      - name: Build current application image
+        run: |
+          docker buildx build --load --platform linux/amd64 --provenance=false -f docker/Dockerfile --target migration -t ratatoskr/unit3d:rwx-migration .
+          docker buildx build --load --platform linux/amd64 --provenance=false -f docker/Dockerfile -t ratatoskr/unit3d:rwx .
+      - name: Real multi-node NFS CSI migration and rollback
+        env:
+          UNIT3D_TEST_IMAGE: ratatoskr/unit3d:rwx
+        run: bash scripts/tests/rwx-kind.sh
+  backup-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
+      - name: Build current backup tools
+        run: docker buildx build --load --platform linux/amd64 --provenance=false -f docker/backup/Dockerfile -t ratatoskr-backup:validation .
+      - name: Real backup and restore drill
+        run: bash scripts/tests/backup-restore-drill.sh

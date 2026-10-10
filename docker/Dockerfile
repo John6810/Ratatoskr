@@ -3,16 +3,30 @@
 # Build context MUST be the repo root so `COPY docker/Caddyfile` resolves:
 #   docker build -f docker/Dockerfile -t ratatoskr/unit3d:dev .
 #
-# Pinned floating tags. For reproducible release builds, append a digest:
-#   FROM dunglas/frankenphp:1-php8.4@sha256:<digest> AS ...
-ARG FRANKENPHP_VERSION=1-php8.4
+# Keep builder and runtime on the same FrankenPHP/PHP release and ABI.
+ARG FRANKENPHP_VERSION=1.13.0-php8.4@sha256:e9a56d27e7f0c30bb1ad122dfee024a014081c4501782be65424b57016f3104a
+ARG FRANKENPHP_BUILDER_VERSION=1.13.0-builder-php8.4@sha256:1b02c625717f2e4d1f4bc6a063879883020e0b316f488e1ebe7fc9e6d3f30e98
 ARG UNIT3D_VERSION=v9.2.0
+
+# Rebuild the official Caddy/FrankenPHP module set with the HTTP/2 security
+# fix. The pinned builder contains the upstream source, Go locks and libphp.
+# Use its own build wrapper to preserve CGO flags and PHP ABI on both arches.
+FROM dunglas/frankenphp:${FRANKENPHP_BUILDER_VERSION} AS frankenphp-builder
+WORKDIR /go/src/app/caddy
+RUN go get golang.org/x/net@v0.60.0 \
+    && go mod verify
+WORKDIR /go/src/app/caddy/frankenphp
+RUN GOBIN=/usr/local/bin ../../go.sh install \
+        -ldflags "-w -s -X 'github.com/caddyserver/caddy/v2.CustomVersion=FrankenPHP v1.13.0 PHP $PHP_VERSION Caddy' -X 'github.com/caddyserver/caddy/v2.CustomBinaryName=frankenphp' -X 'github.com/caddyserver/caddy/v2/modules/caddyhttp.ServerHeader=FrankenPHP Caddy'" \
+        -buildvcs=false \
+    && frankenphp version \
+    && frankenphp build-info
 
 # =============================================================================
 # Stage 1 — builder: fetch UNIT3D, install Composer + Bun deps, build assets.
 # Holds compilers, git, composer, bun. Never reaches the runtime image.
 # =============================================================================
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS builder
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS php-toolchain
 
 ARG UNIT3D_VERSION
 
@@ -20,7 +34,9 @@ ENV COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_NO_INTERACTION=1 \
     DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
@@ -47,15 +63,28 @@ RUN curl -fsSL https://bun.sh/install | bash \
 
 WORKDIR /build
 
+FROM php-toolchain AS builder
+ARG UNIT3D_VERSION
+
 # Pinned UNIT3D source. Tag drives the image — never hardcoded in the URL.
 RUN git clone --depth 1 --branch "${UNIT3D_VERSION}" \
         https://github.com/HDInnovations/UNIT3D.git .
+
+# Security-maintained lock, resolved within upstream composer.json constraints.
+# Reject a changed upstream manifest/lock or an unqualified UNIT3D version.
+# Ordinary builds install this reviewed lock; they never resolve newer packages.
+COPY docker/security/${UNIT3D_VERSION}/ /tmp/unit3d-security/
+RUN sha256sum --check /tmp/unit3d-security/upstream.sha256 \
+    && cp /tmp/unit3d-security/composer.lock composer.lock \
+    && rm -rf /tmp/unit3d-security
 
 # --no-scripts skips Laravel's package:discover post-autoload-dump hook, which
 # boots the framework and chokes on env-driven config (e.g. parse_url(env('APP_URL'))
 # in config/secure-headers.php) when no .env is present at build time.
 # package:discover runs at first artisan invocation inside unit3d-migrate.
-RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction --prefer-dist
+RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction --prefer-dist \
+    && composer check-platform-reqs --no-dev \
+    && composer audit --locked --no-dev
 
 # FrankenPHP worker mode needs a worker entrypoint that calls
 # frankenphp_handle_request() in a loop — stock public/index.php doesn't.
@@ -76,7 +105,7 @@ RUN rm -rf .git .github tests phpunit.xml .editorconfig .styleci.yml \
 # =============================================================================
 # Stage 2 — runtime: FrankenPHP worker mode. No compilers, no composer, no bun.
 # =============================================================================
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS runtime
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS runtime-base
 
 ARG UNIT3D_VERSION
 
@@ -101,7 +130,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # at database/schema/mysql-schema.sql (UNIT3D v9.2.0 ships one). Laravel shells
 # out to `mysql ... < mysql-schema.sql` for fast fresh installs. Also useful
 # for operators debugging the DB inside the container.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         mariadb-client \
@@ -128,15 +159,21 @@ RUN apt-get purge -y --auto-remove linux-libc-dev 2>/dev/null || true
 
 # Production php.ini (opcache enabled, sane memory_limit, no display_errors).
 RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+COPY docker/security/php.ini /usr/local/etc/php/conf.d/zz-ratatoskr-security.ini
+
+COPY --from=frankenphp-builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
+# COPY does not retain file capabilities; restore the official image's setting.
+RUN setcap cap_net_bind_service=+ep /usr/local/bin/frankenphp
 
 WORKDIR /app
 
-# Application code, owned by www-data from the start (no post-COPY chown layer).
-COPY --chown=www-data:www-data --from=builder /build /app
+# Application code is immutable to the application user, including in Compose.
+# Only Laravel's storage and bootstrap cache are writable.
+COPY --chown=root:root --from=builder /build /app
 
 # Caddyfile is the source of truth for the server config. Auto-generated config
 # is not used in production. The file lives at docker/Caddyfile in this repo.
-COPY --chown=www-data:www-data docker/Caddyfile /etc/caddy/Caddyfile
+COPY --chown=root:root docker/Caddyfile /etc/caddy/Caddyfile
 
 # The dunglas/frankenphp Debian image already sets cap_net_bind_service on
 # /usr/local/bin/frankenphp — no extra setcap call needed. We just ensure the
@@ -147,12 +184,22 @@ RUN chown -R www-data:www-data \
         /data/caddy \
         /config/caddy
 
+# No local privilege-elevation helpers or PHP build/debug tools at runtime.
+# Keep php, its extensions, the DB client and curl for lifecycle/health checks.
+RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
+    && rm -f /usr/local/bin/pear /usr/local/bin/peardev /usr/local/bin/pecl \
+        /usr/local/bin/php-cgi /usr/local/bin/phpdbg /usr/local/bin/phpize \
+        /usr/local/bin/php-config /usr/local/bin/install-php-extensions \
+        /usr/local/bin/docker-php-ext-* /usr/local/bin/docker-php-source
+
 # Wrapper entrypoint for cgroup-aware GOMEMLIMIT — see docker/entrypoint.sh.
 # Placed before USER www-data so RUN chmod has permission; ENTRYPOINT is
 # metadata and applies regardless of position in the Dockerfile.
 COPY docker/entrypoint.sh /usr/local/bin/ratatoskr-entrypoint.sh
+COPY docker/lifecycle.php /usr/local/lib/ratatoskr/lifecycle.php
 RUN chmod +x /usr/local/bin/ratatoskr-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/ratatoskr-entrypoint.sh"]
+CMD ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 
 USER www-data
 
@@ -176,5 +223,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 #   MEILISEARCH_HOST, MEILISEARCH_KEY
 #   DEFAULT_OWNER_NAME, DEFAULT_OWNER_EMAIL, DEFAULT_OWNER_PASSWORD   (first boot only)
 #
-# Migrations are NOT run here. They run as a Helm pre-install hook or a
-# Kustomize init Job. See kustomize/base/job-migrate.yaml / chart hooks.
+# Migrations are NOT run here. A dedicated Job runs after dependencies exist;
+# application init containers wait for that Job to complete successfully.
+
+# The short-lived migration image alone retains the SQL CLI needed to import
+# UNIT3D's schema dump. Web, queue and scheduler never need this client.
+FROM runtime-base AS migration
+LABEL org.opencontainers.image.title="ratatoskr-unit3d-migrate"
+ENTRYPOINT ["php", "/usr/local/lib/ratatoskr/lifecycle.php"]
+CMD ["migrate"]
+
+FROM runtime-base AS runtime
+USER root
+RUN apt-get purge -y --auto-remove mariadb-client mariadb-client-core mariadb-common libmariadb3 \
+    && rm -rf /var/lib/apt/lists/*
+USER www-data

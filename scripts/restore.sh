@@ -2,7 +2,7 @@
 # ratatoskr restore — pull a snapshot from restic, decompress, prepare with
 # mariadb-backup, and copy back to a target datadir.
 #
-# DESTRUCTIVE — wipes the target datadir before copy-back. Run only on a
+# Replaces the datadir only after preparing the backup, retaining originals. Run on a
 # stopped MariaDB. Operators must `docker compose stop mariadb` (or equivalent)
 # before invoking this script.
 #
@@ -19,7 +19,7 @@
 # Optional:
 #   TARGET_DIR        default /var/lib/mysql
 #   BACKUP_TAG        default ratatoskr-mariadb
-#   RESTORE_FORCE     true to wipe a non-empty TARGET_DIR (default false)
+#   RESTORE_FORCE     true to replace a non-empty TARGET_DIR (default false)
 #   BACKUP_HOSTNAME   restrict snapshot selection to a specific source host
 
 set -euo pipefail
@@ -33,6 +33,11 @@ fi
 SNAPSHOT_ID="${1:-latest}"
 TARGET_DIR="${TARGET_DIR:-/var/lib/mysql}"
 BACKUP_TAG="${BACKUP_TAG:-ratatoskr-mariadb}"
+TARGET_DIR="$(realpath -m -- "$TARGET_DIR")"
+if [[ "$TARGET_DIR" == / ]]; then
+    echo "ERROR: refusing to restore over the filesystem root" >&2
+    exit 1
+fi
 
 # Refuse to overwrite a non-empty datadir unless explicitly forced. This is
 # the safety net: an operator who runs `restore` against a live datadir
@@ -48,11 +53,7 @@ The restore overwrites the target datadir. To proceed:
 EOF
         exit 1
     fi
-    echo "[restore] RESTORE_FORCE=true — wiping ${TARGET_DIR}"
-    rm -rf "${TARGET_DIR:?}"/*
 fi
-
-mkdir -p "${TARGET_DIR}"
 
 WORK_DIR="$(mktemp -d -t ratatoskr-restore-XXXXXX)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
@@ -72,8 +73,49 @@ restic dump --tag "${BACKUP_TAG}" "${HOST_FLAG[@]}" "${SNAPSHOT_ID}" /mariadb.xb
 echo "[restore] preparing backup with mariadb-backup --prepare"
 mariadb-backup --prepare --target-dir="${WORK_DIR}"
 
+# Never touch the original datadir until the snapshot is fully prepared.
+# Keep its contents on the same filesystem, including dotfiles, so a failed
+# copy-back can be rolled back without downloading another backup.
+mkdir -p "${TARGET_DIR}"
+ROLLBACK_DIR="$(mktemp -d "${TARGET_DIR}/.ratatoskr-before-restore-XXXXXX")"
+shopt -s dotglob nullglob
+REPLACEMENT_STARTED=0
+
+restore_original() {
+    rc=$?
+    trap - EXIT INT TERM
+    if [[ "$rc" -ne 0 ]]; then
+        echo "[restore] copy-back failed; restoring the original datadir" >&2
+        if [[ "$REPLACEMENT_STARTED" == 1 ]]; then
+            for entry in "${TARGET_DIR}"/*; do
+                [[ "$entry" == "$ROLLBACK_DIR" ]] || rm -rf -- "$entry"
+            done
+        fi
+        for entry in "$ROLLBACK_DIR"/*; do
+            mv -- "$entry" "$TARGET_DIR/" || {
+                echo "[restore] recovery incomplete; originals remain in $ROLLBACK_DIR" >&2
+                exit "$rc"
+            }
+        done
+        rmdir -- "$ROLLBACK_DIR"
+    fi
+    rm -rf -- "$WORK_DIR"
+    exit "$rc"
+}
+trap restore_original EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+for entry in "${TARGET_DIR}"/*; do
+    [[ "$entry" == "$ROLLBACK_DIR" ]] || mv -- "$entry" "$ROLLBACK_DIR/"
+done
+
+REPLACEMENT_STARTED=1
+
 echo "[restore] copying back to ${TARGET_DIR}"
-mariadb-backup --copy-back --target-dir="${WORK_DIR}" --datadir="${TARGET_DIR}"
+# The rollback directory is deliberately present in the target.
+mariadb-backup --copy-back --force-non-empty-directories \
+    --target-dir="${WORK_DIR}" --datadir="${TARGET_DIR}"
 
 # Best-effort ownership fix. mariadb-backup --copy-back writes files as the
 # running user; if that's already mysql (UID 999), this is a no-op. If we
@@ -87,4 +129,6 @@ if ! chown -R mysql:mysql "${TARGET_DIR}" 2>/dev/null; then
     echo "[restore]            stat -c '%U:%G %n' ${TARGET_DIR}" >&2
 fi
 
+echo "[restore] original datadir retained at ${ROLLBACK_DIR}"
+echo "[restore] Remove that directory only after verifying the restored database."
 echo "[restore] done. Start MariaDB: docker compose up -d mariadb"

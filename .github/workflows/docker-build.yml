@@ -5,9 +5,9 @@ name: docker-build
 #   - push of tag v*:  builds + pushes the per-image tag plan, signs
 #   - pull_request:    builds + scans only (no push, no sign)
 #
-# Two images are built in parallel via a strategy matrix:
-#   ghcr.io/john6810/unit3d            UNIT3D on FrankenPHP
-#   ghcr.io/john6810/ratatoskr-backup  mariadb-backup + restic
+# Six images are qualified on native amd64 and arm64 runners: application,
+# migration, backup, MariaDB, Redis and MeiliSearch. Main/tag publication
+# requires both image scans and the deployment/recovery qualification.
 #
 # Tag plans differ deliberately:
 #   unit3d   : driven by Dockerfile ARG UNIT3D_VERSION (decoupled from
@@ -31,6 +31,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Extract pinned versions from the Dockerfiles in one place. Outputs are
   # consumed by the matrix to compute image tags and build-args.
@@ -43,6 +47,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Extract versions from Dockerfiles
         id: extract
@@ -65,16 +71,102 @@ jobs:
 
   build:
     needs: versions
-    name: build (${{ matrix.name }})
+    name: build (${{ matrix.name }} ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: unit3d, arch: amd64, runner: ubuntu-latest, dockerfile: docker/Dockerfile}
+          - {name: unit3d, arch: arm64, runner: ubuntu-24.04-arm, dockerfile: docker/Dockerfile}
+          - {name: unit3d-migrate, arch: amd64, runner: ubuntu-latest, dockerfile: docker/Dockerfile, target: migration}
+          - {name: unit3d-migrate, arch: arm64, runner: ubuntu-24.04-arm, dockerfile: docker/Dockerfile, target: migration}
+          - {name: backup, arch: amd64, runner: ubuntu-latest, dockerfile: docker/backup/Dockerfile}
+          - {name: backup, arch: arm64, runner: ubuntu-24.04-arm, dockerfile: docker/backup/Dockerfile}
+          - {name: mariadb, arch: amd64, runner: ubuntu-latest, dockerfile: docker/dependencies/Dockerfile, target: mariadb}
+          - {name: mariadb, arch: arm64, runner: ubuntu-24.04-arm, dockerfile: docker/dependencies/Dockerfile, target: mariadb}
+          - {name: redis, arch: amd64, runner: ubuntu-latest, dockerfile: docker/dependencies/Dockerfile, target: redis}
+          - {name: redis, arch: arm64, runner: ubuntu-24.04-arm, dockerfile: docker/dependencies/Dockerfile, target: redis}
+          - {name: meilisearch, arch: amd64, runner: ubuntu-latest, dockerfile: docker/dependencies/Dockerfile, target: meilisearch}
+          - {name: meilisearch, arch: arm64, runner: ubuntu-24.04-arm, dockerfile: docker/dependencies/Dockerfile, target: meilisearch}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
+      - name: Build native image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target || 'runtime' }}
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: ratatoskr-scan:${{ matrix.name }}-${{ matrix.arch }}-${{ github.sha }}
+          build-args: UNIT3D_VERSION=${{ needs.versions.outputs.unit3d }}
+          cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+          # A fresh OS package resolution on every run avoids stale apt layers.
+          no-cache-filters: ${{ startsWith(matrix.name, 'unit3d') && 'runtime-base,php-toolchain' || matrix.target || 'runtime' }}
+      - name: Verify native runtime
+        env:
+          IMAGE: ratatoskr-scan:${{ matrix.name }}-${{ matrix.arch }}-${{ github.sha }}
+          ARCH: ${{ matrix.arch }}
+          COMPONENT: ${{ matrix.name }}
+        run: |
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = "$ARCH"
+          if [ "$COMPONENT" = unit3d ]; then
+            docker run --rm --entrypoint php "$IMAGE" --version
+            docker run --rm --entrypoint frankenphp "$IMAGE" version
+            IMAGE="$IMAGE" bash scripts/tests/image-security.sh
+          elif [ "$COMPONENT" = unit3d-migrate ]; then
+            docker run --rm --entrypoint php "$IMAGE" --version
+            docker run --rm --entrypoint mariadb "$IMAGE" --version
+          elif [ "$COMPONENT" = backup ]; then
+            docker run --rm --entrypoint restic "$IMAGE" version
+          elif [ "$COMPONENT" = mariadb ]; then
+            docker run --rm --entrypoint mariadbd "$IMAGE" --version
+            docker run --rm --entrypoint gosu "$IMAGE" mysql id
+          elif [ "$COMPONENT" = redis ]; then
+            docker run --rm --entrypoint redis-server "$IMAGE" --version
+          else
+            docker run --rm --entrypoint /bin/meilisearch "$IMAGE" --version
+          fi
+      - name: Full vulnerability inventory (including unfixed and UNKNOWN)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ratatoskr-scan:${{ matrix.name }}-${{ matrix.arch }}-${{ github.sha }}
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '0'
+          ignore-unfixed: false
+          vuln-type: os,library
+          format: json
+          output: trivy.json
+      - name: Reject every vulnerability with an available fix
+        run: python3 scripts/security/check-image.py trivy.json
+      - name: Retain full vulnerability report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vulnerabilities-${{ matrix.name }}-${{ matrix.arch }}
+          path: trivy.json
+          if-no-files-found: error
+          retention-days: 30
+
+  qualification:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/validate.yml
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: [versions, build, qualification]
     runs-on: ubuntu-latest
-
+    timeout-minutes: 45
     permissions:
-      contents: read       # checkout
-      packages: write      # push to ghcr.io
-      id-token: write      # OIDC token for cosign keyless signing
-
-    # fail-fast: false so a Trivy or build failure on one cell does not abort
-    # the other — we still want to know whether the sibling image is healthy.
+      contents: read
+      packages: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -89,8 +181,21 @@ jobs:
               type=raw,value=${{ needs.versions.outputs.unit3d_minor }}
               type=raw,value=${{ needs.versions.outputs.unit3d_major }}
               type=raw,value=ratatoskr-${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+              type=sha,format=long
               type=ref,event=branch
               type=ref,event=pr
+            flavor: |
+              latest=false
+
+          - name: unit3d-migrate
+            image: ghcr.io/john6810/unit3d-migrate
+            dockerfile: docker/Dockerfile
+            target: migration
+            build_args: |
+              UNIT3D_VERSION=${{ needs.versions.outputs.unit3d }}
+            tags: |
+              type=raw,value=${{ needs.versions.outputs.unit3d }}
+              type=sha,format=long
             flavor: |
               latest=false
 
@@ -109,28 +214,51 @@ jobs:
               type=semver,pattern=v{{version}}
               type=semver,pattern={{major}}.{{minor}}
               type=semver,pattern={{major}}
+              type=sha,format=long
               type=ref,event=branch
               type=ref,event=pr
             flavor: |
               latest=auto
+          - name: mariadb
+            image: ghcr.io/john6810/ratatoskr-mariadb
+            dockerfile: docker/dependencies/Dockerfile
+            target: mariadb
+            build_args: ''
+            tags: |
+              type=raw,value=security-20261010
+              type=sha,format=long
+            flavor: |
+              latest=false
+          - name: redis
+            image: ghcr.io/john6810/ratatoskr-redis
+            dockerfile: docker/dependencies/Dockerfile
+            target: redis
+            build_args: ''
+            tags: |
+              type=raw,value=security-20261010
+              type=sha,format=long
+            flavor: |
+              latest=false
+          - name: meilisearch
+            image: ghcr.io/john6810/ratatoskr-meilisearch
+            dockerfile: docker/dependencies/Dockerfile
+            target: meilisearch
+            build_args: ''
+            tags: |
+              type=raw,value=security-20261010
+              type=sha,format=long
+            flavor: |
+              latest=false
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a
         with:
           platforms: linux/arm64
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
       - name: Log in to GHCR
-        # Skip on PR — fork PRs only have a read-only GITHUB_TOKEN, login
-        # would fail. Same-repo PRs could log in but never push, so logging
-        # in serves no purpose.
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
@@ -145,61 +273,32 @@ jobs:
           tags: ${{ matrix.tags }}
           flavor: ${{ matrix.flavor }}
 
-      # First build: amd64 only, loaded into the local Docker daemon so Trivy
-      # can scan it. Multi-platform builds cannot be `--load`ed; the second
-      # multi-arch build below hits the same gha cache and is therefore
-      # near-free. Splitting like this lets Trivy gate the push per cell.
-      - name: Build for scan (linux/amd64, load locally)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
-          load: true
-          tags: ratatoskr-scan:${{ matrix.name }}-${{ github.sha }}
-          build-args: ${{ matrix.build_args }}
-          # Cache scope per cell — unit3d and backup share no useful layers
-          # and would only contend on a single shared scope.
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-
-      - name: Trivy vulnerability scan (CRITICAL, HIGH)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ratatoskr-scan:${{ matrix.name }}-${{ github.sha }}
-          severity: CRITICAL,HIGH
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: os,library
-          format: table
-
-      # Multi-arch build + push. PR runs build only (push=false) — same
-      # cache, validates the arm64 build path without publishing.
       - name: Build & push (linux/amd64,linux/arm64)
         id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target || 'runtime' }}
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build_args }}
-          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-from: |
+            type=gha,scope=${{ matrix.name }}-amd64
+            type=gha,scope=${{ matrix.name }}-arm64
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
           provenance: mode=max
           sbom: true
 
       - name: Install cosign
-        if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
 
       # Keyless OIDC signing. The signature is bound to the manifest digest,
       # which is shared across every tag pushed in the prior step for this
       # cell — one cosign call covers them all.
       - name: Sign image manifest (cosign keyless)
-        if: github.event_name != 'pull_request'
         env:
           IMAGE: ${{ matrix.image }}
           DIGEST: ${{ steps.build.outputs.digest }}

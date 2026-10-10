@@ -81,6 +81,10 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        {{- if not .Values.meilisearch.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
         - name: tmp
           emptyDir: {}
   {{- if .Values.meilisearch.persistence.enabled }}
@@ -88,9 +92,7 @@ spec:
     - metadata:
         name: data
         labels:
-          {{- include "ratatoskr.labels" . | nindent 10 }}
-          app.kubernetes.io/component: search
-          app.kubernetes.io/name: meilisearch
+          {{- include "ratatoskr.claimLabels" (dict "root" . "name" "meilisearch" "component" "search") | nindent 10 }}
       spec:
         accessModes:
           - {{ .Values.meilisearch.persistence.accessMode | quote }}

@@ -1,6 +1,6 @@
 # 🌳 ratatoskr
 
-> The messenger of Yggdrasil — Production-grade Kubernetes deployment for UNIT3D.
+> The messenger of Yggdrasil — Docker and Kubernetes deployment stack for UNIT3D.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Latest release](https://img.shields.io/github/v/release/John6810/Ratatoskr?logo=github&label=release)](https://github.com/John6810/Ratatoskr/releases/latest)
@@ -22,6 +22,11 @@ A modern, opinionated deployment stack for [UNIT3D Community Edition](https://gi
 - 🔍 **MeiliSearch** wired in — fulltext torrent search out of the box
 - 🔄 **GitOps-ready** — ArgoCD `ApplicationSet` template provided
 - 🛡️ **Production hardening** — NetworkPolicies, PDB, HPA, SealedSecrets
+
+The image keeps upstream UNIT3D application source and carries reviewed
+[security dependency updates](docker/security/README.md), checked by Composer
+audit and Trivy before publication. The [security assessment](docs/security-assessment.md)
+records the remaining findings and the limits of local qualification.
 
 ---
 
@@ -58,10 +63,15 @@ values are seeded into the database on the first migration run.
 | **1. Docker Compose** | ✅ v0.1.0 (2026-05-04) | Single-host, quick start |
 | **2. K3s mono-node** | ✅ v0.3.0 — `kustomize/overlays/dev` | Single VPS with K8s |
 | **3. Kubernetes production** | ✅ v0.3.0 — `overlays/prod-rwo`, `prod-rwx`, ArgoCD `ApplicationSet` | Multi-node, GitOps |
-| **4. Helm chart** | 📋 v0.5.0 (planned) | Helm-native operators |
+| **4. Helm chart** | 🚧 `0.5.0-alpha.4` — lifecycle fixes and regression tests | Helm-native operators |
 | **5. Terraform IaC** | 📋 v0.9.0 (planned) | Multi-provider VPS bootstrap |
 
 Each level has its own guide in [`docs/`](./docs).
+
+The [repository review and stabilization plan](docs/ROADMAP.md#current-assessment--review-of-daeca89-2026-10-10)
+records the corrected installation, upgrade, and data-preservation defects, local
+test evidence, and remaining CNI/CSI release gates. See the [Helm guide](helm/ratatoskr/README.md)
+for credential preservation, external services, and alpha limitations.
 
 ---
 
@@ -70,9 +80,10 @@ Each level has its own guide in [`docs/`](./docs).
 | Component | Image / Version |
 |---|---|
 | App | `ghcr.io/john6810/unit3d:v9.2.0` (FrankenPHP) |
-| Database | MariaDB 11 |
-| Cache & queues | Redis 7 |
-| Search | MeiliSearch v1.43 |
+| Migration | `ghcr.io/john6810/unit3d-migrate:v9.2.0` (includes the SQL client) |
+| Database | MariaDB 11.8.9, security-maintained image |
+| Cache & queues | Redis 7.4.11, security-maintained image |
+| Search | MeiliSearch 1.43.1, security-maintained image |
 
 ---
 
@@ -86,7 +97,7 @@ Operator-facing docs cover deployment, upgrade, security, and observability:
 - [📊 Monitoring](docs/monitoring.md) — Observability baseline (Prometheus + Grafana + Loki + Alloy)
 - [⚡ Multi-queue scaling](docs/multi-queue-scaling.md) — KEDA multi-lane pattern (when single-queue is not enough)
 
-Architecture decisions are recorded as ADRs under [`docs/adr/`](docs/adr/) (5 Accepted at v0.4.0).
+Architecture decisions are recorded as ADRs under [`docs/adr/`](docs/adr/) (including the deployment lifecycle in ADR-0007).
 
 ---
 
@@ -97,7 +108,8 @@ Architecture decisions are recorded as ADRs under [`docs/adr/`](docs/adr/) (5 Ac
 - **v0.3.0** ✅ — Kubernetes production overlay (Kustomize, HPA, NetworkPolicy, ArgoCD) — Released 2026-05-08
 - **v0.4.0** ✅ — Documentation expansion & migration tool — Released 2026-05-08
 - **v0.4.1** — S3 storage migration (upstream-PR-gated)
-- **v0.5.0** — Helm chart + Gateway API parity
+- **Next work** — Qualify production CSI/CNI, ingress, backups and external egress; continue assessment of unfixed distribution advisories
+- **v0.5.0** — Helm alpha implemented in part; stabilization → Helm beta → ingress parity
 - **v1.0.0** — Terraform IaC + dedicated `/announce` daemon + full docs
 
 The full version-by-version roadmap with scale envelopes is in [docs/ROADMAP.md](./docs/ROADMAP.md).

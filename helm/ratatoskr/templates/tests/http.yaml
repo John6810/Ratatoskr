@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "ratatoskr.fullname" . }}-http-test
+  labels:
+    {{- include "ratatoskr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  {{- with .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    {{- toYaml .Values.unit3d.podSecurityContext | nindent 4 }}
+  containers:
+    - name: http
+      image: {{ include "ratatoskr.unit3d.image" . | quote }}
+      imagePullPolicy: {{ .Values.unit3d.image.pullPolicy }}
+      command: [curl]
+      args: ["--fail", "--silent", "--show-error", "--max-time", "10", "--output", "/dev/null", {{ printf "http://%s/" (include "ratatoskr.unit3d.fullname" .) | quote }}]
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 100m, memory: 64Mi}
+      securityContext:
+        {{- toYaml .Values.unit3d.containerSecurityContext | nindent 8 }}

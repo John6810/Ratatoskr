@@ -58,7 +58,9 @@ flowchart LR
 ```
 
 `unit3d-migrate` is a one-shot service (`restart: no`) that runs
-`php artisan migrate --force --seed`. It waits for `mariadb`, `redis`,
+`php /usr/local/lib/ratatoskr/lifecycle.php migrate`. It seeds a new database
+once, then runs only schema migrations and search-settings synchronization on
+subsequent invocations. It waits for `mariadb`, `redis`,
 `meilisearch` to be healthy. `unit3d`, `unit3d-scheduler`, `unit3d-queue`
 all wait for `unit3d-migrate` to complete successfully before starting.
 
@@ -71,6 +73,27 @@ TLS and forwards to `127.0.0.1:8080`. Do not edit the published port in
 
 The announce URL is permanent — once `.torrent` files are distributed, the
 domain is baked in forever. Choose carefully before going public.
+
+## Container and network baseline
+
+`docker compose up --build` builds the web image, the separate migration image,
+and three security-maintained dependencies. Database, cache and search share an
+internal backend network with no published ports. Application containers also
+have an outbound network for configured integrations. Compose does not provide
+a destination-specific egress firewall. All services have read-only roots and
+`no-new-privileges`; writable paths use volumes/tmpfs. MariaDB and Redis retain
+only capabilities required by their official initialization entrypoints.
+
+MeiliSearch now runs as UID/GID 65532. Before upgrading an existing Compose
+volume created by a root-running MeiliSearch, take a verified backup, stop the
+stack, and change ownership of that volume to 65532:65532 using an offline
+maintenance container. Do not recursively change host directories. New named
+volumes inherit the correct ownership from the image. Keep the same service
+version for this change; a MeiliSearch feature-version upgrade requires its own
+index migration and restore test.
+
+See [the security assessment](../docs/security-assessment.md) for remaining
+findings and [the hardening guide](../docs/security-hardening.md) for edge controls.
 
 ## Volumes
 
@@ -117,7 +140,7 @@ Run a manual backfill only if MeiliSearch lost data, the index was
 manually flushed, or a UNIT3D upgrade changed `toSearchableArray()`:
 
 ```bash
-docker compose run --rm unit3d-migrate sh -c '
+docker compose run --rm --entrypoint sh unit3d-migrate -c '
   php artisan scout:flush "App\\Models\\Torrent" &&
   php artisan scout:flush "App\\Models\\Person" &&
   php artisan scout:import "App\\Models\\Torrent" &&
@@ -299,9 +322,9 @@ documented in `docs/backup-restore.md` (commit #4).
 | Component | Pin |
 |---|---|
 | UNIT3D | `v9.2.0` (build ARG, override with `UNIT3D_VERSION=...`) |
-| FrankenPHP | `1-php8.4` (Dockerfile ARG) |
-| MariaDB | `11` (currently 11.8 LTS, EOL 2028-06-04) |
-| Redis | `7-alpine` (currently 7.2) |
-| MeiliSearch | `v1.43` |
+| FrankenPHP | `1.13.0-php8.4`, digest-pinned + x/net security rebuild |
+| MariaDB | `11.8.9`, security-maintained base |
+| Redis | `7.4.11`, security-maintained base |
+| MeiliSearch | `1.43.1`, security-maintained base; index format retained |
 
 Run the [`check-upstream-versions`](../.claude/skills/check-upstream-versions/SKILL.md) skill before bumping. The authoritative pin lives in [`../.claude/CLAUDE.md`](../.claude/CLAUDE.md) and [`../docker/Dockerfile`](../docker/Dockerfile).

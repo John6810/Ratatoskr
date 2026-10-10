@@ -5,6 +5,12 @@ Scripts under `scripts/migration/` operationalize procedures from
 `migrate-rwo-to-rwx.sh` (Option B in-place, Path 2) and
 `migrate-compose-to-k8s.sh` (guided 8-step Compose → K8s migration, Path 1).
 
+Both scripts require Python 3 with PyYAML and an explicitly selected cluster:
+set `KUBECONFIG`, or set `KUBECTL_CONTEXT` for RWO→RWX / pass
+`--kubectl-context` for Compose→Kubernetes. Run from the repository root.
+Overlay application uses `scripts/security/apply-kustomize.py` to allow only
+the API Service and endpoint IPs. Cluster discovery must be permitted.
+
 ---
 
 ## migrate-rwo-to-rwx.sh
@@ -28,6 +34,13 @@ Scripts under `scripts/migration/` operationalize procedures from
 
 `NEW_STORAGE_CLASS` has no default. The script exits 14 if it is unset or if
 the named StorageClass does not exist in the cluster.
+
+Before any workload is stopped, the target overlay must render a PVC named
+`unit3d-storage` in `NAMESPACE`, with `ReadWriteMany`, an explicit
+`storageClassName` equal to `NEW_STORAGE_CLASS`, and the original requested
+capacity. Missing or incompatible target configuration exits 1. This prevents
+the final apply from removing the class or attempting an unsupported resize.
+The rendered manifests are kept in the private migration work directory.
 
 ### Optional env vars
 
@@ -127,11 +140,12 @@ script exited non-zero.
    Bound and RWO, `NEW_STORAGE_CLASS` exists in the cluster, `unit3d-app` is
    single-replica, MariaDB StatefulSet healthy, backup marker fresh, no active
    `unit3d-migrate` Job, RBAC verbs available (`patch persistentvolumes`, `delete
-   persistentvolumeclaims`, `apply persistentvolumeclaims`).
+   persistentvolumeclaims`, `create persistentvolumeclaims`, `patch persistentvolumeclaims`).
 
 2. **Scale down (PHASE 1, exit 20)** — scales `unit3d-app`, `unit3d-queue`, and
    `unit3d-scheduler` to 0 replicas and waits up to 180 seconds per deployment for
-   all pods to drain.
+   all pods to drain. Deletes the inactive migration Job and its Pod before the
+   PVC swap: even a completed Pod can keep PVC protection active.
 
 3. **Capture and retain (PHASE 2, exits 21–22)** — writes the old PVC and PV
    manifests to `/tmp/ratatoskr-migration-<timestamp>/` for forensics, then
@@ -139,27 +153,30 @@ script exited non-zero.
 
 4. **PVC swap (PHASE 2, exits 23–25)** — deletes the old PVC (the PV survives
    because of Retain), clears the old PV's stale `claimRef`, applies a rescue PVC
-   (`unit3d-storage-rescue`) that rebinds the old PV by `volumeName`, then applies
+   (`unit3d-storage-rescue`) that rebinds the old PV by `volumeName` with its original StorageClass, then applies
    the new `unit3d-storage` PVC against `NEW_STORAGE_CLASS` with
-   `accessModes: [ReadWriteMany]`. Waits for both PVCs to reach `Bound`.
+   `accessModes: [ReadWriteMany]`. Binding is checked after creating the loader,
+   so `WaitForFirstConsumer` classes can provision storage.
 
 5. **Loader and copy (PHASE 3, exits 26–28)** — applies the `pvc-loader-rwx-migration`
    Pod (`alpine:3.20`, runs as UID 33, old PVC mounted read-only at `/old`, new PVC
-   at `/new`). Runs `rsync -a --delete /old/ /new/` inside the Pod, falling back to
-   `cp -a /old/. /new/` if rsync is absent. Checksums a sample of up to 100 files
-   from both mounts and aborts on mismatch (diffs written to the work directory).
+   at `/new`). Copies each top-level entry, including hidden entries, using
+   `rsync -a` or `cp -a`. It leaves the provisioner-owned mount root's metadata
+   unchanged so the non-root loader works on NFS. SHA-256 checks every regular
+   file using NUL-delimited paths; spaces, quotes, and newlines are supported.
+   Read errors and checksum mismatches abort before workloads restart.
 
 6. **Loader cleanup (PHASE 3)** — deletes the `pvc-loader-rwx-migration` Pod and
    the `unit3d-storage-rescue` PVC. The old PV enters `Released` state with
    `reclaimPolicy: Retain`.
 
-7. **Overlay apply (PHASE 4, exit 29)** — runs `kubectl apply -k <OVERLAY_PATH>`
+7. **Overlay apply (PHASE 4, exit 29)** — renders and applies the overlay through `scripts/security/apply-kustomize.py`
    (default `kustomize/overlays/prod-rwx`) and waits up to 600 seconds for the
    `unit3d-app` rollout to complete.
 
-8. **Finalize old PV (PHASE 4)** — flips the old PV's `reclaimPolicy` back to
-   `Delete`. The PV remains in the cluster (`Released`); the operator deletes it
-   manually after a 24-hour soak period (see [After the migration](#after-the-migration)).
+8. **Finalize old PV (PHASE 4)** — keeps `reclaimPolicy: Retain`. The source
+   remains available for rollback until explicit operator cleanup after a
+   24-hour soak period (see [After the migration](#after-the-migration)).
 
 9. **Post-flight** — execs into a running `unit3d-app` pod and smoke-checks
    `php artisan --version` and `ls /app/storage/`. Both failures are non-fatal
@@ -192,22 +209,20 @@ recovery path — see `docs/upgrade-guide.md` § "Path 2 rollback (Option B)".
 > ⚠️ PHASE 2 abort is the highest-risk failure mode. Do not attempt ad-hoc
 > recovery without reading the rollback procedure in full first.
 
-**Aborted during rsync (PHASE 3)** — delete the loader Pod and re-run. The
-preflights detect partial state (the rescue PVC and new PVC already exist) and
-skip re-creation:
+**Aborted during copy (PHASE 3)** — keep both PVCs while investigating. The old
+data is still available read-only through `unit3d-storage-rescue`; the new PVC
+may contain a partial copy. The script deliberately refuses to restart from
+this state because `unit3d-storage` is already RWX. Follow the
+[retained-volume rollback procedure](../../docs/upgrade-guide.md#path-2-rollback),
+or finish and verify the copy manually before applying the target overlay.
 
 ```bash
 kubectl delete pod -n <namespace> pvc-loader-rwx-migration
 ```
 
-Then re-run the script from the repo root with the same env vars.
-
-**Aborted during overlay apply (PHASE 4)** — roll back the `unit3d-app`
-Deployment, then investigate before re-applying the overlay:
-
-```bash
-kubectl rollout undo -n <namespace> deployment/unit3d-app
-```
+**Aborted during overlay apply (PHASE 4)** — inspect `unit3d-migrate` and rollout
+events. A Deployment rollback does not reverse the PVC swap. Repair the target
+configuration, or follow the retained-volume rollback procedure.
 
 ### After the migration
 
@@ -217,8 +232,12 @@ After 24+ hours of verified prod-rwx operation, clean up the orphaned old PV:
 # Confirm the PV is Released (not Bound)
 kubectl get pv | grep <old-pv-name>
 
-# Delete the orphaned PV
-kubectl delete pv <old-pv-name>
+# Only after verifying the replacement: allow reclamation of the old data.
+# Replace the example name with the recorded source PV.
+kubectl patch pv <old-pv-name> --type=merge \
+  -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'
+# The provisioner can now reclaim the Released volume automatically.
+# Manual backing-volume cleanup depends on the CSI driver.
 ```
 
 Do not delete the backup tarball or MariaDB dump for at least one week. See
@@ -471,7 +490,7 @@ RCLONE_REMOTE=s3-target S3_BUCKET=my-unit3d-prod \
    secrets bundle per `--secrets-mode` (sealed-secrets: runs `kubeseal`; eso:
    emits an `ExternalSecret` template and halts for operator action; vanilla:
    emits a plaintext `Secret` and halts for operator review); applies
-   `kustomize/overlays/$TARGET_OVERLAY` via `kubectl apply -k`; for
+   `kustomize/overlays/$TARGET_OVERLAY` via the API-egress-aware apply helper; for
    sealed-secrets mode applies the bundle; waits up to 10 minutes for the
    `unit3d-migrate` Job to reach `Complete`; scales `unit3d-app` to 0 replicas
    (data not restored yet).

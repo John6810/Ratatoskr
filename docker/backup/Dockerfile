@@ -16,8 +16,8 @@
 # Global build args — declared before the first FROM so BuildKit substitutes
 # them in every stage's `FROM` line. Re-declared (without a default) inside
 # each stage that needs them via `ARG` so the value flows into RUN/LABEL too.
-ARG GO_VERSION=1.26-bookworm
-ARG MARIADB_VERSION=11.8
+ARG GO_VERSION=1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c
+ARG MARIADB_VERSION=11.8@sha256:6422478cb8e159f080fb1d8ccf65101e26fe51385787fde7d16c3b165a331f15
 
 # =============================================================================
 # Stage 1 — restic-builder: compile restic from upstream source.
@@ -34,8 +34,8 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS restic-builder
 ARG RESTIC_GIT_TAG=v0.18.1
 ARG RESTIC_GIT_COMMIT=7d0aa7f2e30546fba7c8f1c0bae4d6704e3d8423
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 # CGO_ENABLED=0 produces a fully static binary that does not depend on the
 # runtime image's libc — robust across any glibc version drift in the
@@ -62,12 +62,16 @@ RUN set -eux; \
 # binary, but functionally equivalent at the restic API surface.
 #
 #   github.com/go-jose/go-jose/v4 4.0.5 -> 4.1.4   CVE-2026-34986 (DoS via crafted JWE)
-#   go.opentelemetry.io/otel/sdk  1.36  -> 1.43.0  CVE-2026-24051, CVE-2026-39883 (PATH hijacking)
-#   google.golang.org/grpc        1.74  -> 1.79.3  CVE-2026-33186 (authz HTTP/2 path bypass)
+#   go.opentelemetry.io/otel/sdk  1.36  -> 1.45.0  PATH hijacking and CVE-2026-81870 log disclosure
+#   google.golang.org/grpc        1.74  -> 1.83.2  CVE-2026-33186, CVE-2026-84304, CVE-2026-84445
+#   golang.org/x/net             0.48  -> 0.60.0  CVE-2026-78669 and earlier HTTP/2 fixes
+#   golang.org/x/crypto          0.46  -> 0.57.0  SSH fixes through CVE-2026-56854
+#   golang.org/x/text            0.32  -> 0.42.0  CVE-2026-56852; matches x/net's requirements
 RUN set -eux; \
     go get github.com/go-jose/go-jose/v4@v4.1.4; \
-    go get go.opentelemetry.io/otel/sdk@v1.43.0; \
-    go get google.golang.org/grpc@v1.79.3; \
+    go get go.opentelemetry.io/otel/sdk@v1.45.0; \
+    go get google.golang.org/grpc@v1.83.2 \
+        golang.org/x/net@v0.60.0 golang.org/x/crypto@v0.57.0 golang.org/x/text@v0.42.0; \
     go mod tidy
 
 # -trimpath strips host filesystem paths from the binary (reproducibility).
@@ -114,7 +118,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # pulled the upstream restic binary tarball at build time and needed both;
 # the from-source build path inherits everything it needs from the
 # golang:${GO_VERSION} stage.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         tini \

@@ -1,5 +1,13 @@
 # `kustomize/overlays/dev/`
 
+Deployment commands below run from the repository root and require Python 3
+with PyYAML plus an explicit `KUBECONFIG` (or `KUBECTL_CONTEXT`). The apply helper
+resolves the API Service and endpoint IPs before applying restrictive egress;
+rendered Secrets stay in memory. For offline GitOps, patch the
+`unit3d-migration-api` NetworkPolicy with those exact CIDRs yourself. Its default
+loopback placeholder deliberately blocks API access. See the
+[security guide](../../../docs/security-hardening.md).
+
 Development overlay for K3s mono-node, Docker Desktop, Kind, or any single-node Kubernetes that an operator can `kubectl apply -k` against without external dependencies. Targets the **deploy-and-go** persona: minimal setup, no sealed-secrets controller required, no S3 endpoint, no DNS, no external load balancer.
 
 ## What this patches vs `base/`
@@ -38,10 +46,9 @@ For prod (sealed-secrets / ESO), see `kustomize/overlays/prod-rwo/`, `kustomize/
 ## Deploy
 
 ```bash
-# Fresh cluster, no NetworkPolicy controller required for basic dev
-# (default-deny only enforces with a CNI that supports NetworkPolicies
-# — k3s defaults work; Kind needs Calico or similar).
-kubectl apply -k kustomize/overlays/dev
+# Select the intended cluster explicitly. Verify that its CNI enforces policies.
+export KUBECONFIG=/path/to/dev-kubeconfig
+python3 scripts/security/apply-kustomize.py kustomize/overlays/dev
 ```
 
 Wait for the bootstrap chain:

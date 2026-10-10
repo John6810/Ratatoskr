@@ -1,0 +1,101 @@
+# Disposable Kind test server only. The hostPath is inside a Kind node.
+# Upstream image: kubernetes-sigs/nfs-ganesha-server-and-external-provisioner.
+# Test clients use NFSv4.0: Ganesha's unsupported GET_DIR_DELEGATION breaks
+# directory access with Linux 6.19+ NFSv4.1 clients (nfs-ganesha issue #1385).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ratatoskr-nfs
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ganesha
+  namespace: ratatoskr-nfs
+data:
+  ganesha.conf: |
+    NFS_CORE_PARAM { Protocols = 4; }
+    LOG { Default_Log_Level = EVENT; }
+    # Kind nodes and this minimal image have no shared directory service.
+    NFSv4 { Only_Numeric_Owners = true; RecoveryRoot = /export/.recovery; }
+    EXPORT {
+      Export_Id = 1;
+      Path = /export;
+      Pseudo = /;
+      Access_Type = RW;
+      Squash = No_Root_Squash;
+      SecType = sys;
+      Protocols = 4;
+      Transports = TCP;
+      FSAL { Name = VFS; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-server
+  namespace: ratatoskr-nfs
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nfs-server
+  template:
+    metadata:
+      labels:
+        app: nfs-server
+    spec:
+      nodeSelector:
+        ratatoskr.io/nfs-server: "true"
+      automountServiceAccountToken: false
+      containers:
+        - name: ganesha
+          image: ghcr.io/kubernetes-sigs/nfs-ganesha:V6.5
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              mkdir -p /usr/local/var/run/ganesha /var/lib/nfs/ganesha /run/dbus
+              chmod 0777 /export
+              rpcbind
+              dbus-daemon --system
+              exec ganesha.nfsd -F -L STDOUT -f /etc/ganesha-test/ganesha.conf
+          securityContext:
+            capabilities:
+              add: [DAC_READ_SEARCH, SYS_RESOURCE]
+          ports:
+            - name: nfs
+              containerPort: 2049
+          readinessProbe:
+            tcpSocket:
+              port: nfs
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ganesha-test
+              readOnly: true
+            - name: exports
+              mountPath: /export
+      volumes:
+        - name: config
+          configMap:
+            name: ganesha
+        - name: exports
+          hostPath:
+            path: /var/local/ratatoskr-nfs
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nfs-server
+  namespace: ratatoskr-nfs
+spec:
+  selector:
+    app: nfs-server
+  ports:
+    - name: nfs
+      port: 2049

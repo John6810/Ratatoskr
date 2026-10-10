@@ -12,16 +12,12 @@
 #   redis.auth.password           (or redis.auth.existingSecret)
 #   meilisearch.masterKey         (or meilisearch.existingSecret)
 #
-# Bootstrapped Secrets are SET ONCE per release. Chart-created Secrets
-# carry helm.sh/hook=pre-install,pre-upgrade and helm.sh/resource-policy=keep
-# so they survive `helm uninstall` (their values authenticate the running
-# DB; deleting them would break it). Consequence: changing a password
-# value in this file and running `helm upgrade` does NOT propagate the
-# new value — the existing Secret is kept intact. Rotation procedure:
-# `kubectl delete secret <release>-<component>` first, THEN `helm upgrade`,
-# THEN restart the dependent workloads. Operators on sealed-secrets / ESO
-# (existingSecret pattern) bypass this — Secret rotation flows through
-# their KMS / sealing pipeline.
+# Chart-managed Secrets are created once and retained. Helm lookup skips
+# their hooks on subsequent upgrades; changing inline values does not rotate
+# existing credentials. Never delete Secrets to rotate passwords: coordinate
+# the server-side account change, update the Secret, then restart clients.
+# MariaDB startup passwords do not change accounts in an initialized datadir.
+# See README.md for rotation and offline GitOps requirements.
 
 # ---- global ---------------------------------------------------------------
 global:
@@ -42,6 +38,16 @@ global:
 
 # ---- unit3d (the application) --------------------------------------------
 unit3d:
+  # Numeric Caddy worker settings; "auto" is invalid for these directives.
+  frankenphp:
+    threads: 4
+    workers: 2
+
+  owner:
+    name: admin
+    email: ""
+    password: ""
+
   image:
     registry: ghcr.io
     repository: john6810/unit3d
@@ -53,9 +59,9 @@ unit3d:
   #   1. Inline (default): set unit3d.appKey to a "base64:..." value.
   #      Generated via `php artisan key:generate --show` or
   #      `echo "base64:$(openssl rand -base64 32)"`.
-  #   2. Bootstrap: set unit3d.bootstrapAppKey=true. The chart runs a
-  #      one-shot Job pre-install that generates a key and patches the
-  #      chart-managed Secret. Mutually exclusive with existingSecret.
+  #   2. Bootstrap: set unit3d.bootstrapAppKey=true. Helm generates a key
+  #      only when creating the first Secret. Existing keys are preserved.
+  #      Mutually exclusive with existingSecret.
   #   3. External: set unit3d.existingSecret to a sealed-secrets / ESO
   #      Secret name. Chart references it; never creates one.
   #
@@ -63,8 +69,8 @@ unit3d:
   # migration. ADR-0004 documents the encrypted-column corruption gotcha.
   appKey: ""
 
-  # Opt-in: chart runs a Job that generates an APP_KEY in-cluster and
-  # patches the chart-managed unit3d Secret. Off by default.
+  # Opt-in: generate APP_KEY at first install; never regenerate on upgrade.
+  # Requires cluster-side Helm lookup; use existingSecret for offline GitOps.
   bootstrapAppKey: false
 
   # External Secret path: when set, chart does NOT create a
@@ -185,12 +191,34 @@ unit3d:
       drop:
         - ALL
 
+  # Overrides applied only to the HTTP container. FrankenPHP carries this
+  # file capability for port 80; dropping it from the bounding set prevents
+  # execution. Workers and migration containers keep all capabilities dropped.
+  httpSecurityContext:
+    capabilities:
+      add:
+        - NET_BIND_SERVICE
+
+  # Pod-scoped safe sysctl: non-root HTTP must bind port 80 even on runtimes
+  # whose no-new-privileges handling suppresses the binary's file capability.
+  httpPodSecurityContext:
+    sysctls:
+      - name: net.ipv4.ip_unprivileged_port_start
+        value: "80"
+
   # Liveness / readiness / startup probes. Empty maps mean the
-  # template uses sensible defaults (HTTP GET / on container port).
+  # template defaults to curl / without following the login redirect.
   probes:
     liveness: {}
     readiness: {}
     startup: {}
+
+  # Let EndpointSlice/kube-proxy remove a terminating Pod before stopping HTTP.
+  # This delay is included in the Pod's 60-second termination grace period.
+  lifecycle:
+    preStop:
+      exec:
+        command: ["sleep", "10"]
 
 # ---- queue worker --------------------------------------------------------
 queue:
@@ -227,6 +255,10 @@ scheduler:
 
 # ---- migrate (one-shot Job) ----------------------------------------------
 migrate:
+  # Full image reference for the short-lived schema importer. Empty selects
+  # ghcr.io/john6810/unit3d-migrate:<appVersion> (honoring global registry).
+  image: ""
+  timeoutSeconds: 900
   # Set false only if running migrations out-of-band (e.g. a separate
   # CI/CD step). Disabling without an alternative path leaves the
   # database unmigrated.
@@ -239,14 +271,13 @@ migrate:
 # ---- mariadb -------------------------------------------------------------
 mariadb:
   # Set false to use an external MariaDB (RDS, Aiven, OVH managed).
-  # External wiring not yet covered at v0.5.0-alpha.1 — see ADR-0001
-  # for the planned managed-DB toggle.
+  # Configure unit3d.database and explicit network egress when disabled.
   enabled: true
 
   image:
-    registry: ""
-    repository: mariadb
-    tag: "11"
+    registry: ghcr.io
+    repository: john6810/ratatoskr-mariadb
+    tag: "security-20261010"
     pullPolicy: IfNotPresent
 
   auth:
@@ -327,9 +358,9 @@ redis:
   enabled: true
 
   image:
-    registry: ""
-    repository: redis
-    tag: "7-alpine"
+    registry: ghcr.io
+    repository: john6810/ratatoskr-redis
+    tag: "security-20261010"
     pullPolicy: IfNotPresent
 
   auth:
@@ -381,9 +412,9 @@ meilisearch:
   enabled: true
 
   image:
-    registry: ""
-    repository: getmeili/meilisearch
-    tag: "v1.43"
+    registry: ghcr.io
+    repository: john6810/ratatoskr-meilisearch
+    tag: "security-20261010"
     pullPolicy: IfNotPresent
 
   # Inline (default): chart creates a Secret holding MEILI_MASTER_KEY.
@@ -491,6 +522,17 @@ ingress:
 
 # ---- networkPolicies -----------------------------------------------------
 networkPolicies:
+  apiServerPorts: [443, 6443, 16443]
+  # Exact API service/control-plane CIDRs. Empty uses Helm lookup; offline
+  # GitOps must supply them explicitly (otherwise API egress fails closed).
+  apiServerCIDRs: []
+  # Disable broad public HTTPS and provide extraEgress for known destinations
+  # when operating a restricted deployment with a reviewed dependency list.
+  allowPublicHTTPS: true
+  # Explicit egress rules for external databases, Redis, search, SMTP, etc.
+  extraEgress: []
+  # Explicit exceptions for clients outside this Helm release (e.g. backups).
+  extraIngress: []
   # default-deny + named allows per kustomize/base/networkpolicies/.
   # Required in prod; safe to leave on in dev.
   enabled: true

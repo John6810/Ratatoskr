@@ -508,7 +508,14 @@ touching `scripts/backup*.sh` on a successful drill. See
 
 ### Full restore (destructive)
 
-⚠️ This overwrites `mariadb-data`. Stop all consumers first. There is no undo.
+This replaces `mariadb-data`. Stop MariaDB and all consumers first. The script
+downloads and prepares the snapshot before moving any existing files, then retains
+the original datadir inside `.ratatoskr-before-restore-*`. Copy-back failure restores
+the originals. A killed container or host failure still requires manual inspection.
+
+Provision space for the original data, the prepared backup, and the restored copy.
+After verifying the recovered database, remove only the exact retained directory
+printed by the restore. Until then it is a rollback copy, not disposable cache.
 
 Pre-flight checklist:
 

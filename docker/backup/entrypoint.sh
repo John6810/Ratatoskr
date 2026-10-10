@@ -9,6 +9,7 @@ case "${1:-backup}" in
     backup)       shift || true; exec /usr/local/bin/backup "$@" ;;
     restore)      shift || true; exec /usr/local/bin/restore "$@" ;;
     restore-test) shift || true; exec /usr/local/bin/restore-test "$@" ;;
-    sh|bash|shell) exec bash ;;
+    sh|bash)      exec "$@" ;;
+    shell)        shift; exec bash "$@" ;;
     *)            exec "$@" ;;
 esac

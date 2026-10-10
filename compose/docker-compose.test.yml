@@ -18,13 +18,14 @@ services:
   # `env_file: !override` replaces the base's `.env` with `.env.test` (the
   # default is to merge both, which would require .env to also exist).
   unit3d-migrate:
-    image: ratatoskr/unit3d:dev
+    image: ratatoskr/unit3d:dev-migration
     build: !reset null
     env_file: !override
       - .env.test
 
   unit3d:
     image: ratatoskr/unit3d:dev
+    build: !reset null
     env_file: !override
       - .env.test
     # Random ephemeral host port so a parallel dev compose on :8080 doesn't clash.

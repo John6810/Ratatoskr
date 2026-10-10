@@ -25,6 +25,7 @@ compose/
 CHANGELOG.md
 
 # Local artifacts that may exist on a contributor's machine
+.local/
 node_modules/
 vendor/
 
