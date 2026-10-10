@@ -151,8 +151,10 @@ RUN chown -R www-data:www-data \
 # Placed before USER www-data so RUN chmod has permission; ENTRYPOINT is
 # metadata and applies regardless of position in the Dockerfile.
 COPY docker/entrypoint.sh /usr/local/bin/ratatoskr-entrypoint.sh
+COPY docker/lifecycle.php /usr/local/lib/ratatoskr/lifecycle.php
 RUN chmod +x /usr/local/bin/ratatoskr-entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/ratatoskr-entrypoint.sh"]
+CMD ["frankenphp", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 
 USER www-data
 
@@ -176,5 +178,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 #   MEILISEARCH_HOST, MEILISEARCH_KEY
 #   DEFAULT_OWNER_NAME, DEFAULT_OWNER_EMAIL, DEFAULT_OWNER_PASSWORD   (first boot only)
 #
-# Migrations are NOT run here. They run as a Helm pre-install hook or a
-# Kustomize init Job. See kustomize/base/job-migrate.yaml / chart hooks.
+# Migrations are NOT run here. A dedicated Job runs after dependencies exist;
+# application init containers wait for that Job to complete successfully.

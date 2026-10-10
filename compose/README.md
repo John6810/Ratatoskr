@@ -58,7 +58,9 @@ flowchart LR
 ```
 
 `unit3d-migrate` is a one-shot service (`restart: no`) that runs
-`php artisan migrate --force --seed`. It waits for `mariadb`, `redis`,
+`php /usr/local/lib/ratatoskr/lifecycle.php migrate`. It seeds a new database
+once, then runs only schema migrations and search-settings synchronization on
+subsequent invocations. It waits for `mariadb`, `redis`,
 `meilisearch` to be healthy. `unit3d`, `unit3d-scheduler`, `unit3d-queue`
 all wait for `unit3d-migrate` to complete successfully before starting.
 

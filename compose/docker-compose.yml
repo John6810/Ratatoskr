@@ -69,9 +69,9 @@ services:
   # sortableAttributes / etc. blocks declared in config/scout.php to
   # MeiliSearch (Torrent + Person indexes in v9.2.0). Without that push,
   # Meili's `torrents` index has no filterable attributes and the `status`
-  # filter that drives /torrents returns 500. Re-running is safe: migrate is
-  # idempotent, the seeder uses firstOrCreate, scout:sync-index-settings is
-  # a push-overwrite of declarative config.
+  # filter that drives /torrents returns 500. The lifecycle wrapper seeds
+  # only a new database: several upstream seeders insert fixed primary keys.
+  # Existing databases only run migrations and search-settings synchronization.
   #
   # `scout:import` is intentionally NOT chained here. On a populated tracker
   # it re-imports every row in 500-batch chunks (hours on real data) on every
@@ -88,11 +88,8 @@ services:
         UNIT3D_VERSION: ${UNIT3D_VERSION:-v9.2.0}
     restart: "no"
     env_file: .env
-    entrypoint: ["sh", "-c"]
-    command:
-      - >-
-        php /app/artisan migrate --force --seed &&
-        php /app/artisan scout:sync-index-settings
+    entrypoint: ["php", "/usr/local/lib/ratatoskr/lifecycle.php"]
+    command: ["migrate"]
     volumes:
       - unit3d-storage:/app/storage
     depends_on:

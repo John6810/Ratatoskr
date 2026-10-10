@@ -11,10 +11,10 @@
 	# frankenphp-worker.php), copied to public/ at build time. Stock public/index.php
 	# does not call frankenphp_handle_request() and aborts the worker loop.
 	frankenphp {
-		num_threads {$FRANKENPHP_NUM_THREADS:auto}
+		num_threads {$FRANKENPHP_NUM_THREADS:4}
 		worker {
 			file ./public/frankenphp-worker.php
-			num {$FRANKENPHP_NUM_WORKERS:auto}
+			num {$FRANKENPHP_NUM_WORKERS:2}
 		}
 	}
 
