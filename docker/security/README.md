@@ -75,7 +75,45 @@ arm64. Remove the override only after a newer upstream image contains the fix
 and passes the same checks. Custom-build reference:
 [FrankenPHP Docker documentation](https://frankenphp.dev/docs/docker/).
 
-UNIT3D pull requests build and scan amd64 and arm64 on matching native runners.
-The arm64 job also executes PHP and FrankenPHP from the resulting image. This
-avoids lengthy QEMU compilation of PHP/CGO during review. Main/tag publication
-still builds the multi-platform manifest and signs it; PRs never publish images.
+## Runtime and dependency images
+
+`docker/Dockerfile` produces two images from the same upstream application:
+`runtime` serves HTTP, queues and scheduling without MariaDB CLI libraries;
+`migration` retains the CLI needed by Laravel schema imports. Always update both
+together. Source and Caddy configuration are root-owned; only designated storage
+and cache paths are writable. PHP suppresses version disclosure and exception
+arguments. Caddy refuses dotfiles and direct PHP-like script URLs, keeps announce
+responses uncompressed, and removes URI/headers from access logs.
+
+Both Debian runtime stages upgrade all available distribution packages, including
+XZ 5.8.1-1+deb13u2. Base digests remain pinned; installed security package versions
+can advance during a rebuild. Record and deploy resulting image digests.
+`docker/dependencies/Dockerfile` preserves MariaDB 11.8.9, Redis 7.4.11 and
+MeiliSearch 1.43.1 data formats while updating their OS packages. MariaDB's gosu
+1.19 helper is rebuilt from a verified upstream commit with a current Go toolchain
+and fixed user/sys modules. MeiliSearch runs as UID 65532. A newer MeiliSearch
+feature release requires a separately tested index migration.
+
+Backup tooling uses the same pinned MariaDB base. Its Restic source build also
+updates OpenTelemetry SDK to 1.45.0 for
+[CVE-2026-81870](https://github.com/open-telemetry/opentelemetry-go/security/advisories/GHSA-8wmf-6v46-5gfg).
+
+## Publication gate
+
+Every PR builds and executes all six images on native amd64 and arm64 runners.
+Trivy retains the complete OS/library inventory, including unfixed findings and
+UNKNOWN severity. `scripts/security/check-image.py` rejects every available fix
+at **any severity** and fails on missing OS scan results. No ignore list or VEX
+suppression was added. CI refreshes OS package layers instead of reusing stale
+apt/apk resolution. Composer's production audit remains mandatory.
+
+Main/tag publication requires both these image checks and the reusable manifest,
+secret scan, Compose, Helm, RWX and physical backup/restore qualification. It
+builds multi-platform images with SBOM/provenance and signs their manifest digest.
+PRs never publish images. New dependency and migration repositories must exist
+from an authorized main/tag publication, or be built and loaded into a local
+cluster explicitly; unmerged PR image tags are not registry releases.
+
+The [assessment](../../docs/security-assessment.md) records remaining distribution
+findings and operational limits. A passing available-fix gate does not certify
+that the image has no vulnerabilities.

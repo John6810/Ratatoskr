@@ -1,5 +1,13 @@
 # Upgrade guide
 
+Deployment commands below run from the repository root and require Python 3
+with PyYAML plus an explicit `KUBECONFIG` (or `KUBECTL_CONTEXT`). The apply helper
+resolves the API Service and endpoint IPs before applying restrictive egress;
+rendered Secrets stay in memory. For offline GitOps, patch the
+`unit3d-migration-api` NetworkPolicy with those exact CIDRs yourself. Its default
+loopback placeholder deliberately blocks API access. See the
+[security guide](./security-hardening.md).
+
 Operator-facing procedures for migrating an existing ratatoskr deployment to a newer version or a different deployment mode. Three paths covered: Compose → Kubernetes (Path 1), prod-rwo → prod-rwx (Path 2), and UNIT3D version bumps within a Kubernetes deployment (Path 3).
 
 > **Manual procedures only at v0.3.** The unified migration tool ROADMAP'd for v0.4 will automate the data-transfer portions of Paths 1 and 2 (PVC migration, MariaDB restore orchestration, S3 sync). This guide will be amended with the automated path when v0.4 ships. Until then, the steps below are the canonical procedures — well-trodden but operator-driven.
@@ -121,7 +129,7 @@ $EDITOR values.env
 # kustomization.yaml's resources: block.
 
 # Apply the overlay
-kubectl apply -k kustomize/overlays/<target>
+python3 scripts/security/apply-kustomize.py kustomize/overlays/<target>
 ```
 
 Wait for the `unit3d-migrate` Job to complete. The migrate Job runs initial Laravel migrations on the still-empty database, ensuring the schema is at the correct version for the target image tag — these will be overwritten by the dump restore in Step 5, but the schema check is the safety net:
@@ -380,9 +388,11 @@ $EDITOR unit3d-scheduler/deployment.yaml
 $EDITOR unit3d-migrate/job.yaml
 # Change image: ghcr.io/<operator>/unit3d:v9.2.0 -> v9.3.0 in each.
 
-# Option B: kustomize edit (single command, applies to all four)
+# Option B: update the web and migration image together
 kustomize edit set image \
-  ghcr.io/<operator>/unit3d=ghcr.io/<operator>/unit3d:v9.3.0
+  ghcr.io/<operator>/unit3d=ghcr.io/<operator>/unit3d:v9.3.0 \
+  ghcr.io/<operator>/unit3d-migrate=ghcr.io/<operator>/unit3d-migrate:v9.3.0
+cd ../..
 ```
 
 ### Step 3 — Run the new migration Job before starting workloads
@@ -403,7 +413,7 @@ kubectl scale -n unit3d deployment/unit3d-app deployment/unit3d-queue \
 kubectl wait -n unit3d --for=delete pod \
   -l 'app.kubernetes.io/name in (unit3d-app,unit3d-queue,unit3d-scheduler)' --timeout=180s
 kubectl delete job -n unit3d unit3d-migrate --ignore-not-found --wait
-kubectl apply -k kustomize/overlays/prod-rwo
+python3 scripts/security/apply-kustomize.py kustomize/overlays/prod-rwo
 kubectl wait -n unit3d --for=condition=complete job/unit3d-migrate --timeout=15m
 kubectl logs -n unit3d job/unit3d-migrate
 ```
@@ -441,10 +451,12 @@ kubectl get pods -n unit3d -l app.kubernetes.io/name=unit3d-app \
 # Revert the image tag to the previous version
 cd kustomize/base
 kustomize edit set image \
-  ghcr.io/<operator>/unit3d=ghcr.io/<operator>/unit3d:v9.2.0
+  ghcr.io/<operator>/unit3d=ghcr.io/<operator>/unit3d:v9.2.0 \
+  ghcr.io/<operator>/unit3d-migrate=ghcr.io/<operator>/unit3d-migrate:v9.2.0
+cd ../..
 
 # Apply
-kubectl apply -k kustomize/overlays/<target>
+python3 scripts/security/apply-kustomize.py kustomize/overlays/<target>
 
 # Watch the rollback
 kubectl rollout status deployment/unit3d-app -n unit3d

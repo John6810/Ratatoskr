@@ -5,6 +5,12 @@ Scripts under `scripts/migration/` operationalize procedures from
 `migrate-rwo-to-rwx.sh` (Option B in-place, Path 2) and
 `migrate-compose-to-k8s.sh` (guided 8-step Compose → K8s migration, Path 1).
 
+Both scripts require Python 3 with PyYAML and an explicitly selected cluster:
+set `KUBECONFIG`, or set `KUBECTL_CONTEXT` for RWO→RWX / pass
+`--kubectl-context` for Compose→Kubernetes. Run from the repository root.
+Overlay application uses `scripts/security/apply-kustomize.py` to allow only
+the API Service and endpoint IPs. Cluster discovery must be permitted.
+
 ---
 
 ## migrate-rwo-to-rwx.sh
@@ -164,7 +170,7 @@ script exited non-zero.
    the `unit3d-storage-rescue` PVC. The old PV enters `Released` state with
    `reclaimPolicy: Retain`.
 
-7. **Overlay apply (PHASE 4, exit 29)** — runs `kubectl apply -k <OVERLAY_PATH>`
+7. **Overlay apply (PHASE 4, exit 29)** — renders and applies the overlay through `scripts/security/apply-kustomize.py`
    (default `kustomize/overlays/prod-rwx`) and waits up to 600 seconds for the
    `unit3d-app` rollout to complete.
 
@@ -484,7 +490,7 @@ RCLONE_REMOTE=s3-target S3_BUCKET=my-unit3d-prod \
    secrets bundle per `--secrets-mode` (sealed-secrets: runs `kubeseal`; eso:
    emits an `ExternalSecret` template and halts for operator action; vanilla:
    emits a plaintext `Secret` and halts for operator review); applies
-   `kustomize/overlays/$TARGET_OVERLAY` via `kubectl apply -k`; for
+   `kustomize/overlays/$TARGET_OVERLAY` via the API-egress-aware apply helper; for
    sealed-secrets mode applies the bundle; waits up to 10 minutes for the
    `unit3d-migrate` Job to reach `Complete`; scales `unit3d-app` to 0 replicas
    (data not restored yet).

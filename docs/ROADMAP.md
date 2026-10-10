@@ -8,7 +8,7 @@ This document tracks where we're going, what's in flight, and what's still on th
 
 ## Current assessment — review of `daeca89` (2026-10-10)
 
-The review findings are corrected in the working tree, chart `0.5.0-alpha.3`.
+The review findings are corrected, with security hardening in chart `0.5.0-alpha.4`.
 Installation, upgrade, migration failure/recovery, and physical backup/restore
 now have executable regression coverage. The chart remains alpha; deployment
 stabilization comes before ingress parity, Gateway API, database HA, and Terraform.
@@ -53,9 +53,9 @@ Design and operating constraints: [ADR-0007](./adr/0007-deployment-lifecycle.md)
 
 | Check | Result |
 |---|---|
-| Safety/configuration regression suite | 20 tests; namespace ownership, restore failures, retained PV, checksum I/O failures, immutable claim labels, and Helm configuration contracts |
+| Safety/configuration regression suite | 30 tests; API allowlists, security gates, namespace ownership, restore failures, retained PV, checksum I/O failures, immutable claim labels, and Helm configuration contracts |
 | Strict Helm lint and Kubernetes/CRD schemas | 238 resources across four Helm variants and three Kustomize overlays |
-| Application and backup Docker images | Built locally from this checkout |
+| Six Docker targets | Web, migration, backup, MariaDB, Redis and MeiliSearch built locally from this checkout |
 | Compose smoke | Healthy services, HTTP 302, initial seeding, successful second migration, SIGTERM cancellation of init waits, cleanup |
 | Helm lifecycle on disposable Kind | Fresh bootstrap, HTTP and authenticated search, stable credentials/data on upgrade, failed-migration gate, recovery, and external services with custom Secret keys |
 | Multi-node Helm RWX lifecycle | Real static NFS 4.0 mounts, two app replicas on different nodes, chart-version upgrade, old replicas remain available through a deliberately failed migration, Helm rollback, recovery, and authenticated external search |
@@ -100,28 +100,38 @@ source release as of 2026-10-10.
 
 FrankenPHP 1.13.0 is rebuilt from the official builder's sources and original
 module set with `golang.org/x/net` 0.60.0. Builder and runtime are pinned by
-multi-platform digest to the same PHP ABI. The resulting local image passes
-the existing Trivy gate: zero fixable HIGH/CRITICAL findings, with no new
-exceptions or relaxed policy. A full scan without `--ignore-unfixed` still
-reports Debian findings without a fixed distribution version (82 HIGH and
-9 CRITICAL package/advisory occurrences on 2026-10-10). A passing CI gate is
-not a claim that the image has zero vulnerabilities; these distribution
-findings require continued assessment and upstream fixes.
+multi-platform digest to the same PHP ABI. The original security update passed the former HIGH/CRITICAL available-fix gate.
+The subsequent full inventory exposed a missed UNKNOWN-severity XZ update and a
+LOW OpenTelemetry SDK fix. Chart `0.5.0-alpha.4` now requires all available fixes
+at **every severity**, retains complete reports, and qualifies all six images on
+native amd64 and arm64. Main/tag publication requires deployment/recovery checks.
+PRs do not publish images.
 
-See [the dependency maintenance procedure](../docker/security/README.md).
-Compose now also exercises owner login, session persistence, CSRF rejection,
-and a real Livewire search update. PR checks remain the source of truth for
-remote image scans, both architectures, and complete lifecycle qualification.
+The web image excludes the MariaDB CLI; migrations use a separate image from the
+same source and maintained lock. Service versions remain MariaDB 11.8.9,
+Redis 7.4.11 and MeiliSearch 1.43.1, with updated OS packages and a rebuilt gosu
+helper. Source is immutable to the runtime user, Compose is restricted, Caddy
+protects script paths and access-log credentials, and API egress is restricted to
+actual cluster endpoints. Helm also includes a profile that blocks public HTTPS
+egress until the operator explicitly permits required integrations.
 
-The backup image's source-build dependency overrides now include gRPC 1.83.2,
-x/net 0.60.0, x/crypto 0.57.0, and x/text 0.42.0 in response to its scan findings.
-Compose tests retry image acquisition up to three times after a registry timeout;
-application startup and functional assertions are never retried to mask failures.
+The current full web scan contains **66 HIGH and 1 CRITICAL** package/advisory
+occurrences (23 distinct HIGH/CRITICAL CVEs), all without a distribution fix in
+this scan. The migration image retains **82 HIGH and 9 CRITICAL**, executes only
+for migrations and is not an HTTP service. These are not suppressed or classified
+as universally non-exploitable. See the [security assessment](./security-assessment.md)
+for triage, other image results and verification limits.
+
+Compose exercises owner login, session persistence, CSRF rejection and Livewire
+search. Kubernetes tests include allowed database/cache/search traffic and denied
+cross-release/API-decoy connections. Physical backup/restore, Kustomize APP_KEY
+bootstrap and multi-node lifecycle/storage rollback are exercised locally. PR
+checks remain the source of truth for the remote matrix and dynamic NFS CSI run.
 
 ### Next work, in order
 
-1. Require passing PR checks before publication and follow distribution
-   advisories without available fixes. Qualify the lifecycle suite on the
+1. Review remaining distribution advisories and verify published digests and
+   signatures before release. Qualify the lifecycle suite on the
    intended production CNI, including API-server and external-service egress.
 2. Repeat the multi-node RWX suites with the production CSI drivers on disposable
    data, including dynamic provisioning and retained-volume rollback. Measure
@@ -218,7 +228,7 @@ This point release lands the storage scope originally planned for v0.4.0. **Hard
 
 ### v0.5.0 — Helm chart, then ingress parity — In progress
 
-The chart at [`helm/ratatoskr/`](../helm/ratatoskr/) is `0.5.0-alpha.3`.
+The chart at [`helm/ratatoskr/`](../helm/ratatoskr/) is `0.5.0-alpha.4`.
 R1–R8 and the runtime startup/seed defects are corrected with local regression
 coverage. There are no external subchart dependencies.
 

@@ -356,7 +356,8 @@ install() {
     if [ -n "${UNIT3D_TEST_IMAGE:-}" ]; then
         set -- --set-string "unit3d.image.registry=" \
             --set-string "unit3d.image.repository=${UNIT3D_TEST_IMAGE%:*}" \
-            --set-string "unit3d.image.tag=${UNIT3D_TEST_IMAGE##*:}"
+            --set-string "unit3d.image.tag=${UNIT3D_TEST_IMAGE##*:}" \
+            --set-string "migrate.image=${UNIT3D_MIGRATION_IMAGE:-$UNIT3D_TEST_IMAGE-migration}"
     fi
     log "22/ helm install $RELEASE -n $NAMESPACE --wait --timeout=$INSTALL_TIMEOUT"
     if ! helm install "$RELEASE" "$CHART_PATH" \

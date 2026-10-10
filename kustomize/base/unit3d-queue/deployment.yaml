@@ -28,6 +28,7 @@ spec:
       # unit3d-app and unit3d-migrate). fsGroup 33 makes the shared
       # unit3d-storage PVC mount group-writable.
       securityContext:
+        seccompProfile: {type: RuntimeDefault}
         runAsNonRoot: true
         runAsUser: 33
         runAsGroup: 33
@@ -88,8 +89,6 @@ spec:
             - secretRef:
                 name: unit3d-secrets
             - secretRef:
-                name: mariadb-secrets
-            - secretRef:
                 name: redis-secrets
             - secretRef:
                 name: meilisearch-secrets
@@ -97,6 +96,13 @@ spec:
                 name: unit3d-storage-secrets
                 optional: true
           env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secrets
+                  key: DB_PASSWORD
+            - name: DEFAULT_OWNER_PASSWORD
+              value: ""
             - name: MEILISEARCH_KEY
               valueFrom:
                 secretKeyRef:

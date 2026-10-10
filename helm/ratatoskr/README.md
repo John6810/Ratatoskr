@@ -5,7 +5,7 @@ MariaDB, Redis, MeiliSearch, and FrankenPHP. See [DISCLAIMER.md](../../DISCLAIME
 
 | Field | Value |
 |---|---|
-| Chart version | `0.5.0-alpha.3` |
+| Chart version | `0.5.0-alpha.4` |
 | App version | `v9.2.0` |
 | Kubernetes API minimum | `>=1.30.0-0` |
 | Schema validation target | `1.32.0` |
@@ -16,6 +16,12 @@ production CSI/CNI qualification, and publication are separate release gates in 
 [roadmap](../../docs/ROADMAP.md). `ingress.enabled=true` is explicitly rejected.
 
 ## Install
+
+The migration image (`unit3d-migrate`) is separate from the web image; override
+`migrate.image` with a full reference when using custom builds. Dependency
+images are the security-maintained `ratatoskr-{mariadb,redis,meilisearch}` snapshot.
+For this unmerged alpha, build/load all images locally or use your own registry;
+PR checks do not publish them. Production deployments should pin image digests.
 
 Create a private values file based on [`values.yaml`](./values.yaml), supplying:
 
@@ -35,10 +41,18 @@ initial database. Never use committed `ci/` placeholder credentials in a deploym
 
 ```bash
 helm upgrade --install ratatoskr helm/ratatoskr \
-  --namespace unit3d --create-namespace -f private-values.yaml \
+  --namespace unit3d --create-namespace \
+  -f helm/ratatoskr/values-hardened.yaml -f private-values.yaml \
   --wait --wait-for-jobs --timeout 15m
 helm test ratatoskr --namespace unit3d --logs
 ```
+
+The hardened profile disables public HTTPS egress. Add precise `extraEgress`
+for required SMTP, object storage and metadata services; otherwise those
+integrations will fail closed. Set `unit3d.trustedProxies` to the actual ingress
+addresses and use an HTTPS `appUrl` so session cookies are Secure. Production
+debug mode and a wildcard trusted proxy are rejected. NetworkPolicies select
+only this release; cross-release service clients need explicit `extraIngress`.
 
 Use port forwarding or operator-managed ingress to reach the HTTP Service.
 The application runs as UID 33; only its HTTP container adds `NET_BIND_SERVICE`
@@ -68,6 +82,11 @@ Only waiting init containers mount a projected Kubernetes API token. The Role
 permits `get` on the current Job only. Configure `networkPolicies.apiServerPorts`
 when the control-plane endpoint uses a different port; verify enforcement with
 your CNI, including Service-address translation. Defaults cover 443, 6443, 16443.
+Connected Helm resolves the API Service and Endpoints to exact host CIDRs.
+Offline renderers must set `networkPolicies.apiServerCIDRs` explicitly; the
+loopback fallback intentionally denies API access. Operator credentials need
+read access to `default/kubernetes` Service and Endpoints for auto-discovery.
+Reconfigure these CIDRs if the control-plane endpoints change.
 
 An upgrade failure does not undo database migrations. Inspect the Job logs,
 correct the cause, and upgrade again; use a tested database backup when schema

@@ -21,6 +21,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 docker image inspect ratatoskr/unit3d:dev >/dev/null
+bash scripts/tests/image-security.sh
 # Cancellation must interrupt an init wait, including in worker Pods with a
 # long termination grace period. Exit 143 proves SIGTERM handling, not SIGKILL.
 docker run -d --name "$project-init" --entrypoint php \
@@ -41,6 +42,10 @@ for attempt in 1 2 3; do
 done
 "${compose[@]}" up -d --wait --wait-timeout 180
 "${compose[@]}" exec -T unit3d curl -fsS --max-time 10 -o /dev/null -w '%{http_code}\n' http://127.0.0.1/
+"${compose[@]}" exec -T unit3d php -r '
+foreach (["MARIADB_ROOT_PASSWORD", "MARIADB_BACKUP_PASSWORD", "DEFAULT_OWNER_PASSWORD"] as $key) {
+    if (getenv($key)) { fwrite(STDERR, "Unexpected administrative credential: $key\n"); exit(1); }
+}'
 python3 scripts/tests/http-session.py "http://$("${compose[@]}" port unit3d 80)"
 # A second run must preserve already seeded data instead of inserting duplicates.
 "${compose[@]}" run --rm --no-deps unit3d-migrate

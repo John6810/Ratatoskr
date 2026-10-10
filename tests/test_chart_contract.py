@@ -14,6 +14,40 @@ HELM = os.environ.get('HELM_BINARY', shutil.which('helm'))
 
 @unittest.skipUnless(HELM, 'helm is required')
 class ChartTests(unittest.TestCase):
+    def test_security_boundaries_and_offline_api_fail_closed(self):
+        docs = self.render('networkPolicies.allowPublicHTTPS=false')
+        policies = [d for d in docs if d['kind'] == 'NetworkPolicy']
+        self.assertFalse(any(d['metadata']['name'].endswith('egress-https') for d in policies))
+        api = next(d for d in policies if d['metadata']['name'].endswith('migration-api'))
+        self.assertEqual(api['spec']['egress'][0]['to'], [{'ipBlock': {'cidr': '127.0.0.1/32'}}])
+        for d in policies:
+            self.assertEqual(d['spec']['podSelector']['matchLabels']['app.kubernetes.io/instance'], 'ratatoskr')
+        for suffix in ['mariadb-ingress', 'redis-ingress', 'meilisearch-ingress']:
+            policy = next(d for d in policies if d['metadata']['name'].endswith(suffix))
+            for rule in policy['spec']['ingress']:
+                for peer in rule['from']:
+                    self.assertEqual(peer['podSelector']['matchLabels']['app.kubernetes.io/instance'], 'ratatoskr')
+        explicit = self.render('networkPolicies.apiServerCIDRs[0]=192.0.2.10/32')
+        api = next(d for d in explicit if d['kind'] == 'NetworkPolicy' and d['metadata']['name'].endswith('migration-api'))
+        self.assertEqual(api['spec']['egress'][0]['to'], [{'ipBlock': {'cidr': '192.0.2.10/32'}}])
+
+    def test_migration_uses_separate_image_with_matching_version(self):
+        docs = self.render()
+        job = next(d for d in docs if d['kind'] == 'Job')
+        pod = job['spec']['template']['spec']
+        self.assertEqual(pod['containers'][0]['image'], 'ghcr.io/john6810/unit3d-migrate:v9.2.0')
+        self.assertEqual(pod['initContainers'][0]['image'], 'ghcr.io/john6810/unit3d:v9.2.0')
+        docs = self.render('migrate.image=registry.example.invalid/migrate@sha256:custom')
+        job = next(d for d in docs if d['kind'] == 'Job')
+        self.assertEqual(job['spec']['template']['spec']['containers'][0]['image'],
+                         'registry.example.invalid/migrate@sha256:custom')
+
+    def test_secure_cookies_follow_public_https_url(self):
+        for url, expected in [('https://tracker.example.org', 'true'), ('http://localhost:8080', 'false')]:
+            docs = self.render('unit3d.appUrl=' + url)
+            config = next(d for d in docs if d['kind'] == 'ConfigMap' and 'SESSION_DRIVER' in d.get('data', {}))
+            self.assertEqual(config['data']['SESSION_SECURE_COOKIE'], expected)
+
     def render(self, *overrides, succeeds=True, chart='helm/ratatoskr'):
         args = [HELM, 'template', 'ratatoskr', str(chart), '--namespace', 'test',
                 '--kube-version', '1.32.0', '-f', 'helm/ratatoskr/ci/test-values.yaml']
@@ -55,6 +89,7 @@ class ChartTests(unittest.TestCase):
             self.assertNotIn('ratatoskr-mariadb', [e.get('secretRef', {}).get('name') for e in main['envFrom']])
             self.assertFalse(pod['automountServiceAccountToken'])
             if resource['kind'] == 'Deployment':
+                self.assertEqual(variables['DEFAULT_OWNER_PASSWORD'], {'name': 'DEFAULT_OWNER_PASSWORD', 'value': ''})
                 self.assertEqual(pod['initContainers'][0]['env'][0]['value'], job['metadata']['name'])
                 self.assertEqual(pod['serviceAccountName'], 'ratatoskr')
 
@@ -77,7 +112,9 @@ class ChartTests(unittest.TestCase):
                  ('unit3d.frankenphp.workers=4', 'threads must exceed workers'),
                  ('storage.enabled=false', 'writable PVC'),
                  ('storage.accessMode=ReadWriteOncePod', 'ReadWriteMany'),
-                 ('unit3d.replicas=2', 'ReadWriteMany')]
+                 ('unit3d.replicas=2', 'ReadWriteMany'),
+                 ('unit3d.trustedProxies=*', 'wildcard trust'),
+                 ('unit3d.appDebug=true', 'false in production')]
         for value, message in cases:
             with self.subTest(value=value):
                 self.assertIn(message, self.render(value, succeeds=False))

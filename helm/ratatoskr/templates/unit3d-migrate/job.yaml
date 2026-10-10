@@ -50,7 +50,7 @@ spec:
               mountPath: /app/storage
       containers:
         - name: migrate
-          image: {{ include "ratatoskr.unit3d.image" . | quote }}
+          image: {{ include "ratatoskr.migrate.image" . | quote }}
           imagePullPolicy: {{ .Values.unit3d.image.pullPolicy | default "IfNotPresent" }}
           # Seed only a new database; synchronize search settings on every run.
           command: ["php", "/opt/ratatoskr/lifecycle.php", "migrate"]

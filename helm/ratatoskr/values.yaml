@@ -255,6 +255,9 @@ scheduler:
 
 # ---- migrate (one-shot Job) ----------------------------------------------
 migrate:
+  # Full image reference for the short-lived schema importer. Empty selects
+  # ghcr.io/john6810/unit3d-migrate:<appVersion> (honoring global registry).
+  image: ""
   timeoutSeconds: 900
   # Set false only if running migrations out-of-band (e.g. a separate
   # CI/CD step). Disabling without an alternative path leaves the
@@ -272,9 +275,9 @@ mariadb:
   enabled: true
 
   image:
-    registry: ""
-    repository: mariadb
-    tag: "11"
+    registry: ghcr.io
+    repository: john6810/ratatoskr-mariadb
+    tag: "security-20261010"
     pullPolicy: IfNotPresent
 
   auth:
@@ -355,9 +358,9 @@ redis:
   enabled: true
 
   image:
-    registry: ""
-    repository: redis
-    tag: "7-alpine"
+    registry: ghcr.io
+    repository: john6810/ratatoskr-redis
+    tag: "security-20261010"
     pullPolicy: IfNotPresent
 
   auth:
@@ -409,9 +412,9 @@ meilisearch:
   enabled: true
 
   image:
-    registry: ""
-    repository: getmeili/meilisearch
-    tag: "v1.43"
+    registry: ghcr.io
+    repository: john6810/ratatoskr-meilisearch
+    tag: "security-20261010"
     pullPolicy: IfNotPresent
 
   # Inline (default): chart creates a Secret holding MEILI_MASTER_KEY.
@@ -520,8 +523,16 @@ ingress:
 # ---- networkPolicies -----------------------------------------------------
 networkPolicies:
   apiServerPorts: [443, 6443, 16443]
+  # Exact API service/control-plane CIDRs. Empty uses Helm lookup; offline
+  # GitOps must supply them explicitly (otherwise API egress fails closed).
+  apiServerCIDRs: []
+  # Disable broad public HTTPS and provide extraEgress for known destinations
+  # when operating a restricted deployment with a reviewed dependency list.
+  allowPublicHTTPS: true
   # Explicit egress rules for external databases, Redis, search, SMTP, etc.
   extraEgress: []
+  # Explicit exceptions for clients outside this Helm release (e.g. backups).
+  extraIngress: []
   # default-deny + named allows per kustomize/base/networkpolicies/.
   # Required in prod; safe to leave on in dev.
   enabled: true

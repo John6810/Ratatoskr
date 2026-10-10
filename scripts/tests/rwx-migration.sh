@@ -65,6 +65,8 @@ for d in docs:
             d['data'][key] = base64.b64encode(value.encode()).decode()
     pod = d.get('spec', {}).get('template', {}).get('spec', {})
     for c in pod.get('containers', []) + pod.get('initContainers', []):
+        if c['image'].startswith('ghcr.io/john6810/unit3d-migrate:') and os.environ.get('UNIT3D_TEST_IMAGE'):
+            c['image'] = os.environ.get('UNIT3D_MIGRATION_IMAGE', os.environ['UNIT3D_TEST_IMAGE'] + '-migration')
         if c['image'].startswith('ghcr.io/john6810/unit3d:') and os.environ.get('UNIT3D_TEST_IMAGE'):
             c['image'] = os.environ['UNIT3D_TEST_IMAGE']
 (work / 'rwo.yaml').write_text(yaml.safe_dump_all(docs))
@@ -92,6 +94,7 @@ patches.append({'target': {'kind': 'Deployment', 'name': 'unit3d-app'}, 'patch':
     'apiVersion': 'kustomize.config.k8s.io/v1beta1', 'kind': 'Kustomization',
     'resources': ['source.yaml'], 'patches': patches}))
 PY
+python3 scripts/security/configure-api-egress.py "$work/rwo.yaml" "$work/rwo.yaml"
 kubectl apply -f "$work/rwo.yaml" >/dev/null
 wait_app() {
     kubectl -n "$namespace" wait --for=condition=complete job/unit3d-migrate --timeout=600s

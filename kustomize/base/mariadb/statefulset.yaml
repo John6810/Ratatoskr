@@ -17,7 +17,7 @@ spec:
       # 60s is generous but bounded. The Compose stack uses start_period: 30s
       # in healthcheck.sh which is comparable.
       terminationGracePeriodSeconds: 60
-      # mariadb:11 ships a native mysql user at UID/GID 999. ratatoskr keeps
+      # The MariaDB base ships a native mysql user at UID/GID 999. ratatoskr keeps
       # the upstream UID per the convention established in ADR scaffolding —
       # components with a native user (Redis 999, MariaDB 999, www-data 33)
       # keep theirs; only images that ship as root with no non-root user
@@ -33,7 +33,7 @@ spec:
         fsGroup: 999
       containers:
         - name: mariadb
-          image: mariadb:11
+          image: ghcr.io/john6810/ratatoskr-mariadb:security-20261010
           imagePullPolicy: IfNotPresent
           # Mirrors compose/docker-compose.yml:12-19. The official mariadb
           # entrypoint reads MARIADB_* on first boot to bootstrap the root
@@ -79,7 +79,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          # healthcheck.sh ships with mariadb:11 (since 10.11). --connect
+          # healthcheck.sh ships with MariaDB (since 10.11). --connect
           # opens a connection; --innodb_initialized waits for InnoDB
           # recovery to finish, which is what we actually need before
           # letting unit3d-migrate or app pods connect.

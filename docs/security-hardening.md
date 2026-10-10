@@ -14,6 +14,49 @@ behind ingress routing and `/announce` constraints, see
 > ⚠️ Read [DISCLAIMER.md](../DISCLAIMER.md) before deploying. Operators bear full legal
 > responsibility for their instance.
 
+## Implemented baseline — chart 0.5.0-alpha.4
+
+This baseline is implemented and locally exercised; it is not a penetration-test
+or production certification. See the dated [security assessment](./security-assessment.md).
+
+- All available OS/library fixes are required by CI, including LOW and UNKNOWN.
+  Full unfixed findings remain visible. Image sources and build actions are pinned.
+- Web/queue/scheduler images exclude the SQL client. A separate short-lived
+  migration image includes it. Source is root-owned, SUID/SGID bits and PHP build
+  helpers are removed, PHP version/error disclosure is disabled.
+- Compose uses read-only roots, bounded tmpfs/process counts, no-new-privileges,
+  reduced capabilities and an internal database/cache/search network. MeiliSearch
+  runs as UID 65532; existing root-owned Compose volumes need offline ownership
+  migration after backup. Kubernetes uses non-root application containers,
+  RuntimeDefault seccomp and init-only API tokens.
+- Application containers do not receive database administrator credentials;
+  long-lived workloads mask the initial-owner password. Only migrations retain
+  that password for first seeding. The owner email remains available because
+  UNIT3D uses it for backup notifications.
+- Caddy rejects direct PHP-like script URLs and dotfiles. Access logs discard
+  request URI and all request/response headers to avoid storing announce passkeys,
+  cookies and authorization data. Status, timing and client IP remain available.
+  URI-based log analysis is consequently unavailable. Apply equivalent redaction
+  to the external proxy, CDN and application log pipeline.
+- Announce replies remain uncompressed; tests exercise both `/announce` and its
+  passkey form. HTTPS application URLs enable Secure session cookies in Helm;
+  production Kustomize overlays explicitly enable them. Set real proxy addresses.
+- Helm policies isolate releases and allow only the Kubernetes API Service and
+  ready endpoint IPs. Connected Helm discovers those addresses; offline GitOps
+  must provide `networkPolicies.apiServerCIDRs`. Kustomize deployment uses
+  `python3 scripts/security/apply-kustomize.py <overlay>` with explicit
+  `KUBECONFIG` or `KUBECTL_CONTEXT` and PyYAML. API discovery fails before migration
+  operations if endpoints are unavailable. Reconcile allowlists after endpoint changes.
+- `helm/ratatoskr/values-hardened.yaml` disables public HTTPS egress. Load it before
+  site-specific values and add only required external destinations. Standard
+  NetworkPolicy uses IPs, not domain names. Custom DNS/NodeLocal DNS also needs an
+  explicit rule if it differs from the CoreDNS selector `k8s-app=kube-dns`.
+
+No host firewall, SSH configuration, kernel parameters, production accounts or
+external DNS were changed. TLS, a tested ingress policy, host maintenance,
+admin 2FA, off-host backups and recovery targets still depend on the operator's
+actual production infrastructure.
+
 ## Threat model
 
 ratatoskr is internet-exposed by design. A BitTorrent tracker cannot function behind auth-only
@@ -83,7 +126,12 @@ default-deny with named allows for DNS, intra-namespace traffic, and TCP 443 egr
 non-private IPs.
 
 The 443-egress policy (`20-unit3d-egress-https.yaml`) is wide: it permits all outbound 443
-traffic from all UNIT3D workloads. Operators on **Cilium** can tighten this to specific FQDNs.
+traffic from all UNIT3D workloads. NetworkPolicies are additive: adding a narrow
+policy does **not** revoke an existing broad allow. First remove that policy in
+your Kustomize overlay (or set Helm `networkPolicies.allowPublicHTTPS=false`),
+then permit the required destinations. Operators on **Cilium** can use FQDN rules.
+DNS and internal service policies must remain in place. Test both permitted
+traffic and denied destinations against the actual CNI.
 
 ```yaml
 # Cilium-only, operator-extension — NOT shipped in base/
@@ -305,40 +353,14 @@ securityContext:
 
 `readOnlyRootFilesystem: true` is already active in the base. UNIT3D writes to
 `/app/storage`, `/app/bootstrap/cache`, `/data/caddy`, `/config/caddy`, and `/tmp` at runtime.
-The base deployment mounts `emptyDir` volumes at each of these paths so that the root filesystem
-can remain read-only.
+The base deployment uses the persistent storage PVC plus `emptyDir` volumes for
+the other writable paths, keeping the root filesystem read-only.
 
-**seccomp** is not set in the base manifest. Operators on Kubernetes 1.25+ should enable
-`RuntimeDefault`:
-
-```yaml
-# Strategic merge patch — add to your overlay
-# kustomize/overlays/prod-rwo/patches/unit3d-app-seccomp.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: unit3d-app
-spec:
-  template:
-    spec:
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
-```
-
-Apply it via your overlay's `kustomization.yaml`:
-
-```yaml
-patches:
-  - path: patches/unit3d-app-seccomp.yaml
-    target:
-      kind: Deployment
-      name: unit3d-app
-```
-
-The `RuntimeDefault` seccomp profile uses the container runtime's built-in syscall allowlist,
-blocking uncommon and dangerous syscalls without requiring a custom profile. It is safe for
-FrankenPHP worker mode.
+Application Pods now set `seccompProfile.type: RuntimeDefault`; dependency
+containers already use it. This applies the runtime's syscall restrictions.
+`/app/storage` is a persistent volume, while cache, Caddy state and temporary
+paths use dedicated writable mounts. Only the HTTP container adds
+`NET_BIND_SERVICE`; queues, scheduler and migrations drop all capabilities.
 
 **AppArmor** profiles are distro-dependent and not portable across Kubernetes distributions.
 Operators on Ubuntu nodes with AppArmor enabled can add an annotation-based profile, but

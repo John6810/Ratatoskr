@@ -21,7 +21,7 @@ spec:
         fsGroup: 999
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: ghcr.io/john6810/ratatoskr-redis:security-20261010
           imagePullPolicy: IfNotPresent
           # Mirrors compose/docker-compose.yml:35-40 (--requirepass + --appendonly yes).
           # Note: REDIS_PASSWORD is interpolated into argv at pod start; visible via

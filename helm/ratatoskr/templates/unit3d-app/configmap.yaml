@@ -38,6 +38,7 @@ data:
   SESSION_DRIVER: "redis"
   SESSION_CONNECTION: "session"
   SESSION_LIFETIME: "120"
+  SESSION_SECURE_COOKIE: {{ hasPrefix "https://" .Values.unit3d.appUrl | quote }}
 
   QUEUE_CONNECTION: "redis"
   BROADCAST_CONNECTION: "redis"

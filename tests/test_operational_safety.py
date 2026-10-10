@@ -20,7 +20,11 @@ if name == 'helm':
     elif a[0] == 'install': sys.exit(22)
     elif a[0] not in ['lint', 'status', 'uninstall']: sys.exit(97)
 elif name == 'kubectl':
-    if a[0] == 'version':
+    if a == ['-n', 'default', 'get', 'service', 'kubernetes', '-o', 'json']:
+        print(json.dumps({'spec': {'clusterIP': '10.96.0.1'}}))
+    elif a == ['-n', 'default', 'get', 'endpoints', 'kubernetes', '-o', 'json']:
+        print(json.dumps({'subsets': [{'addresses': [{'ip': '192.0.2.2'}]}]}))
+    elif a[0] == 'version':
         print(json.dumps({'clientVersion': {'gitVersion': 'v1.32.0'}, 'serverVersion': {'gitVersion': 'v1.32.0'}}))
     elif a[:2] == ['get', 'storageclass']: pass
     elif a[:2] == ['get', 'namespace']:

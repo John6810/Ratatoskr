@@ -141,6 +141,14 @@ banner() {
 # kubectl wrappers
 # ============================================================================
 # Build the kubectl context flag once. Empty if KUBECTL_CONTEXT not set.
+# Security-scoped Kustomize apply needs these before any data movement.
+python3 -c 'import yaml' || { printf 'Python 3 with PyYAML is required\n' >&2; exit 1; }
+if [ -z "${KUBECONFIG:-}" ] && [ -z "${KUBECTL_CONTEXT:-}" ]; then
+    printf 'Set KUBECONFIG or KUBECTL_CONTEXT explicitly before migration\n' >&2
+    exit 1
+fi
+KUBECTL_CONTEXT="$KUBECTL_CONTEXT" python3 scripts/security/configure-api-egress.py --check
+
 KUBECTL_CTX_FLAG=""
 if [ -n "${KUBECTL_CONTEXT}" ]; then
     KUBECTL_CTX_FLAG="--context=${KUBECTL_CONTEXT}"
@@ -164,6 +172,10 @@ kc_mutate() {
     if [ "$DRY_RUN" = "1" ]; then
         printf '[DRY-RUN] kubectl %s\n' "$*"
         return 0
+    fi
+    if [ "${1:-}" = apply ] && [ "${2:-}" = -k ]; then
+        KUBECTL_CONTEXT="$KUBECTL_CONTEXT" python3 scripts/security/apply-kustomize.py "$3"
+        return $?
     fi
     if [ "$VERBOSE" = "1" ]; then
         printf '+ kubectl %s %s\n' "$KUBECTL_CTX_FLAG" "$*" >&2

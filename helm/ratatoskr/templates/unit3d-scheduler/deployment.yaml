@@ -59,7 +59,7 @@ spec:
           envFrom:
             {{- include "ratatoskr.unit3d.envFrom" . | nindent 12 }}
           env:
-            {{- include "ratatoskr.unit3d.env" . | nindent 12 }}
+            {{- include "ratatoskr.unit3d.runtimeEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
           securityContext:

@@ -31,10 +31,11 @@ created=1
 kind create cluster --name "$cluster" --config scripts/tests/fixtures/kind-multinode.yaml --wait 120s \
     --image kindest/node:v1.32.0@sha256:c48c62eac5da28cdadcf560d1d8616cfa6783b58f0d94cf63ad1bf49600cb027
 kind load docker-image "$UNIT3D_TEST_IMAGE" --name "$cluster"
+kind load docker-image "${UNIT3D_MIGRATION_IMAGE:-$UNIT3D_TEST_IMAGE-migration}" --name "$cluster"
 # Reuse locally cached dependencies without downloading them again. Import only
 # the runtime platform; registry archives can also contain provenance manifests.
 cached_images=()
-for image in mariadb:11 redis:7-alpine getmeili/meilisearch:v1.43 ghcr.io/kubernetes-sigs/nfs-ganesha:V6.5 "${PVC_LOADER_IMAGE:-alpine:3.20}"; do
+for image in ghcr.io/john6810/ratatoskr-mariadb:security-20261010 ghcr.io/john6810/ratatoskr-redis:security-20261010 ghcr.io/john6810/ratatoskr-meilisearch:security-20261010 ghcr.io/kubernetes-sigs/nfs-ganesha:V6.5 "${PVC_LOADER_IMAGE:-alpine:3.20}"; do
     if docker image inspect "$image" >/dev/null 2>&1; then cached_images+=("$image"); fi
 done
 if [ "${#cached_images[@]}" != 0 ]; then

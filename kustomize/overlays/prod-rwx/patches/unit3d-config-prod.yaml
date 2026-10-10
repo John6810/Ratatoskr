@@ -18,5 +18,6 @@ metadata:
 data:
   APP_ENV: production
   APP_DEBUG: "false"
+  SESSION_SECURE_COOKIE: "true"
   LOG_LEVEL: info
   MEILI_ENV: production

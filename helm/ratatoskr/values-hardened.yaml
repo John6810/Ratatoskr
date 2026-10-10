@@ -1,0 +1,13 @@
+# Overlay on deployment-specific values. Review SMTP, S3 and metadata API
+# destinations and add precise extraEgress rules; public HTTPS is denied.
+unit3d:
+  appEnv: production
+  appDebug: false
+  trustedProxies: "" # Set only the real ingress/proxy addresses when used.
+networkPolicies:
+  enabled: true
+  allowPublicHTTPS: false
+  # For offline GitOps set apiServerCIDRs to the exact Service + endpoint IPs.
+  # Helm's connected install/upgrade discovers them automatically.
+  apiServerCIDRs: []
+  extraEgress: []

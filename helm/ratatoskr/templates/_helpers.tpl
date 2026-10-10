@@ -360,6 +360,14 @@ generate APP_KEY into an operator-managed external Secret).
     name: {{ include "ratatoskr.unit3d.secretName" . | quote }}
 {{- end -}}
 
+{{- define "ratatoskr.unit3d.runtimeEnv" -}}
+{{ include "ratatoskr.unit3d.env" . }}
+{{- range list "DEFAULT_OWNER_PASSWORD" }}
+- name: {{ . }}
+  value: ""
+{{- end }}
+{{- end -}}
+
 {{- define "ratatoskr.unit3d.env" -}}
 - name: APP_KEY
   valueFrom:
@@ -430,7 +438,17 @@ true
 {{- end -}}
 {{- end -}}
 
+{{- define "ratatoskr.migrate.image" -}}
+{{- .Values.migrate.image | default (printf "%s/john6810/unit3d-migrate:%s" (.Values.global.imageRegistry | default "ghcr.io") .Chart.AppVersion) -}}
+{{- end -}}
+
 {{- define "ratatoskr.validate" -}}
+{{- if contains "*" .Values.unit3d.trustedProxies -}}
+{{- fail "unit3d.trustedProxies must list trusted proxy CIDRs; wildcard trust permits client IP spoofing" -}}
+{{- end -}}
+{{- if and (eq .Values.unit3d.appEnv "production") .Values.unit3d.appDebug -}}
+{{- fail "unit3d.appDebug must be false in production" -}}
+{{- end -}}
 {{- if le (int .Values.unit3d.frankenphp.threads) (int .Values.unit3d.frankenphp.workers) -}}
 {{- fail "unit3d.frankenphp.threads must exceed workers so FrankenPHP can start" -}}
 {{- end -}}

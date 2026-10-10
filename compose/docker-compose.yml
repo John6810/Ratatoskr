@@ -8,10 +8,44 @@
 
 name: ratatoskr
 
+x-no-database-admin: &no-database-admin
+  MARIADB_ROOT_PASSWORD: ""
+  MARIADB_BACKUP_PASSWORD: ""
+
+x-application-security: &application-security
+  environment:
+    <<: *no-database-admin
+    DEFAULT_OWNER_PASSWORD: ""
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  pids_limit: 256
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    - /app/bootstrap/cache:rw,noexec,nosuid,nodev,size=16m,uid=33,gid=33,mode=0770
+    - /data/caddy:rw,noexec,nosuid,nodev,size=32m,uid=33,gid=33,mode=0700
+    - /config/caddy:rw,noexec,nosuid,nodev,size=16m,uid=33,gid=33,mode=0700
+  networks: [application, backend]
+
 services:
   mariadb:
-    image: mariadb:11
+    image: ghcr.io/john6810/ratatoskr-mariadb:security-20261010
+    build:
+      context: ..
+      dockerfile: docker/dependencies/Dockerfile
+      target: mariadb
     restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # Only the initial volume setup / drop to mysql needs these capabilities.
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    read_only: true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+      - /run/mysqld:rw,noexec,nosuid,nodev,size=16m,uid=999,gid=999,mode=0755
+    networks: [backend]
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?}
       MARIADB_DATABASE: ${DB_DATABASE:?}
@@ -30,8 +64,20 @@ services:
       start_period: 30s
 
   redis:
-    image: redis:7-alpine
+    image: ghcr.io/john6810/ratatoskr-redis:security-20261010
+    build:
+      context: ..
+      dockerfile: docker/dependencies/Dockerfile
+      target: redis
     restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    read_only: true
+    pids_limit: 128
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    networks: [backend]
     command:
       - redis-server
       - --requirepass
@@ -48,8 +94,19 @@ services:
       start_period: 5s
 
   meilisearch:
-    image: getmeili/meilisearch:v1.43
+    image: ghcr.io/john6810/ratatoskr-meilisearch:security-20261010
+    build:
+      context: ..
+      dockerfile: docker/dependencies/Dockerfile
+      target: meilisearch
     restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    networks: [backend]
     environment:
       MEILI_MASTER_KEY: ${MEILISEARCH_KEY:?}
       MEILI_ENV: ${MEILI_ENV:-production}
@@ -80,10 +137,13 @@ services:
   # scheduled command (every 15 min, delta-only) inside unit3d-scheduler.
   # See compose/README.md for the manual backfill recipe.
   unit3d-migrate:
-    image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
+    <<: *application-security
+    environment: *no-database-admin
+    image: ratatoskr/unit3d-migrate:${UNIT3D_VERSION:-v9.2.0}
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      target: migration
       args:
         UNIT3D_VERSION: ${UNIT3D_VERSION:-v9.2.0}
     restart: "no"
@@ -101,7 +161,17 @@ services:
         condition: service_healthy
 
   unit3d:
+    <<: *application-security
+    cap_add: [NET_BIND_SERVICE]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "80"
     image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: runtime
+      args:
+        UNIT3D_VERSION: ${UNIT3D_VERSION:-v9.2.0}
     restart: unless-stopped
     env_file: .env
     ports:
@@ -128,6 +198,7 @@ services:
       start_period: 60s
 
   unit3d-scheduler:
+    <<: *application-security
     image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
     restart: unless-stopped
     env_file: .env
@@ -155,6 +226,7 @@ services:
       start_period: 30s
 
   unit3d-queue:
+    <<: *application-security
     image: ratatoskr/unit3d:${UNIT3D_VERSION:-v9.2.0}
     restart: unless-stopped
     env_file: .env
@@ -181,6 +253,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+networks:
+  application: {}
+  # Infrastructure has no published ports or direct route to the internet.
+  backend:
+    internal: true
 
 volumes:
   mariadb-data:

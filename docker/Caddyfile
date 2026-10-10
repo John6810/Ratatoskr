@@ -28,12 +28,30 @@
 {$SERVER_NAME} {
 	log {
 		output stdout
-		format json
+		# UNIT3D embeds passkeys in paths, not only query parameters. Header
+		# values (Referer, cookies, authorization) can contain credentials too.
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+				resp_headers delete
+			}
+		}
 	}
 
 	root * /app/public
 
-	encode zstd br gzip
+	# Announce responses must retain their exact bencoded representation.
+	@compressible not path /announce /announce/*
+	encode @compressible zstd br gzip
+
+	header {
+		-Server
+		-X-Powered-By
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
 
 	# Long cache for hashed Vite assets.
 	@static {
@@ -41,12 +59,17 @@
 	}
 	header @static Cache-Control "public, max-age=31536000, immutable"
 
-	# /announce is served by the Laravel app — no special routing here.
-	# Octane requires the worker stub to be the index + try_files fallback
-	# (so dynamic routes are handled by the worker, not /index.php).
-	php_server {
-		index frankenphp-worker.php
-		try_files {path} frankenphp-worker.php
-		resolve_root_symlink
+	route {
+		# Never expose dotfiles or dispatch arbitrary PHP files placed in the
+		# public tree. Requests enter Laravel only through the worker below.
+		@private path_regexp private (?i)(^|/)\.[^/]+
+		respond @private 404
+		@scripts path_regexp scripts (?i)\.(php[0-9]?|phtml|phar)(/|$)
+		respond @scripts 404
+		php_server {
+			index frankenphp-worker.php
+			try_files {path} frankenphp-worker.php
+			resolve_root_symlink
+		}
 	}
 }

@@ -39,7 +39,12 @@ spec:
         values: [app, worker, scheduler, bootstrap]
   policyTypes: [Egress]
   egress:
-    - ports:
+    # Replace with the API Service and control-plane endpoint CIDRs using
+    # scripts/security/configure-api-egress.py before applying this render.
+    - to:
+        - ipBlock:
+            cidr: 127.0.0.1/32
+      ports:
         - protocol: TCP
           port: 443
         - protocol: TCP

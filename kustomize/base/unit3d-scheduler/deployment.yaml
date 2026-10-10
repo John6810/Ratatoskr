@@ -32,6 +32,7 @@ spec:
       # command to receive SIGTERM and exit cleanly.
       terminationGracePeriodSeconds: 60
       securityContext:
+        seccompProfile: {type: RuntimeDefault}
         runAsNonRoot: true
         runAsUser: 33
         runAsGroup: 33
@@ -91,8 +92,6 @@ spec:
             - secretRef:
                 name: unit3d-secrets
             - secretRef:
-                name: mariadb-secrets
-            - secretRef:
                 name: redis-secrets
             - secretRef:
                 name: meilisearch-secrets
@@ -102,6 +101,13 @@ spec:
           # Lighter than the queue worker — scheduler dispatches, doesn't
           # process. Per .claude/rules/k8s.md baseline.
           env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secrets
+                  key: DB_PASSWORD
+            - name: DEFAULT_OWNER_PASSWORD
+              value: ""
             - name: MEILISEARCH_KEY
               valueFrom:
                 secretKeyRef:

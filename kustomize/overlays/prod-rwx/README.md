@@ -1,5 +1,13 @@
 # prod-rwx — production overlay for RWX storage clusters
 
+Deployment commands below run from the repository root and require Python 3
+with PyYAML plus an explicit `KUBECONFIG` (or `KUBECTL_CONTEXT`). The apply helper
+resolves the API Service and endpoint IPs before applying restrictive egress;
+rendered Secrets stay in memory. For offline GitOps, patch the
+`unit3d-migration-api` NetworkPolicy with those exact CIDRs yourself. Its default
+loopback placeholder deliberately blocks API access. See the
+[security guide](../../../docs/security-hardening.md).
+
 Multi-replica HA production deployment of UNIT3D, designed for clusters with a `ReadWriteMany` storage class available. `unit3d-app` and `unit3d-queue` scale 2-N via HPA + PDB + RollingUpdate (zero-downtime app, conservative-default queue). MariaDB sized for the 5K-10K active-user envelope. S3 routing is **on by default** for the 3 Storage-aware disks per [ADR-0002](../../../docs/adr/0002-storage-strategy-unit3d-storage.md). The [`ingress-traefik`](../../components/ingress-traefik/) Component is composed by default; operators on nginx/ALB swap it in their fork.
 
 For RWO-only clusters, see [`overlays/prod-rwo/`](../prod-rwo/).
@@ -96,7 +104,7 @@ Step-by-step for a fresh prod-rwx deploy:
 
 8. **Apply:**
    ```bash
-   kubectl apply -k kustomize/overlays/prod-rwx/
+   python3 scripts/security/apply-kustomize.py kustomize/overlays/prod-rwx/
    ```
 
 9. **Verify rollout:**

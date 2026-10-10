@@ -18,7 +18,8 @@ applies-to:
 - **`bun install --frozen-lockfile`** then `bun run build`. Never `bun install` without the flag (silent lockfile drift).
 - **Required PHP extensions**: `pdo_mysql`, `redis`, `intl`, `bcmath`, `gd`, `zip`, `exif`, `opcache`, `pcntl`, `sodium`. Install via FrankenPHP's `install-php-extensions` helper.
 - **`apt-get install` always with `--no-install-recommends`** and followed by `rm -rf /var/lib/apt/lists/*` in the same `RUN` to keep the layer clean.
-- **`COPY --chown=www-data:www-data`** when copying app files into the runtime stage. Never `COPY` then `RUN chown` (extra layer, root-owned files briefly).
+- **Application source and Caddy configuration remain root-owned.** Use `COPY --chown=root:root`; grant UID 33 ownership only on storage/cache and Caddy writable directories. The application must not be able to modify executable source.
+- **Separate migration tooling.** The `migration` target retains the MariaDB CLI needed by schema imports; the final `runtime` target removes the CLI and its libraries. Keep both images on the same UNIT3D source and maintained Composer lock.
 - **Permissions on `storage/` and `bootstrap/cache/`** must be writable by the FrankenPHP user. The Dockerfile sets this; do not rely on volume-time chown at runtime.
 
 ## Image surface

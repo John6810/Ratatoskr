@@ -4,7 +4,7 @@
 
 ## Project
 
-**ratatoskr** is a production-grade deployment stack for [UNIT3D Community Edition](https://github.com/HDInnovations/UNIT3D), the Laravel-based private BitTorrent tracker. It fills a real ecosystem gap: no official Helm chart, no GitOps blueprint, dead community Compose files. We ship four progressive levels — Compose → K3s → multi-node K8s (Kustomize + ArgoCD) → Terraform IaC — built around a single FrankenPHP image.
+**ratatoskr** is a production-grade deployment stack for [UNIT3D Community Edition](https://github.com/HDInnovations/UNIT3D), the Laravel-based private BitTorrent tracker. It fills a real ecosystem gap: no official Helm chart, no GitOps blueprint, dead community Compose files. We ship four progressive levels — Compose → K3s → multi-node K8s (Kustomize + ArgoCD) → Terraform IaC — built around a FrankenPHP runtime and a separate migration image.
 
 **Infrastructure only.** Treat like Nextcloud or Jellyfin: dual-use, lawful purposes only. Operators are responsible for what they distribute.
 
@@ -20,9 +20,9 @@
 |---|---|---|
 | Application | UNIT3D | `v9.2.0` |
 | Runtime | FrankenPHP worker mode | `1.13.0-php8.4`, digest-pinned, x/net `0.60.0` rebuild |
-| Database | MariaDB | `11` |
-| Cache / queues / broadcast | Redis | `7` |
-| Search | MeiliSearch | latest stable (verify) |
+| Database | MariaDB | `11.8.9`, digest-pinned base + OS/gosu security refresh |
+| Cache / queues / broadcast | Redis | `7.4.11`, digest-pinned base + OS security refresh |
+| Search | MeiliSearch | `1.43.1`, retained index format + OS security refresh; newer feature releases require migration qualification |
 | Broadcasting | Laravel broadcast, Redis driver | bundled (`BROADCAST_CONNECTION=redis`) |
 
 Mismatches between this file and reality have happened. Run the `check-upstream-versions` skill before pinning anything new, and update code + this table in the same commit.
@@ -42,7 +42,7 @@ remove the audits to make a build pass.
 
 **K8s naming**: namespace `unit3d`, resources named `<component>` (e.g. `mariadb`, `unit3d-app`, `unit3d-queue`). Recommended labels (`app.kubernetes.io/*`) on every resource.
 
-**Image registry**: `ghcr.io/john6810/unit3d:<unit3d-version>`, plus `<version>-<sha>` for reproducibility.
+**Image registry**: `ghcr.io/john6810/unit3d:<unit3d-version>` and `unit3d-migrate:<unit3d-version>`, plus `sha-<full-commit>` aliases. Security-maintained dependencies use `ratatoskr-{mariadb,redis,meilisearch}:security-20261010`. Pin the published digest in production.
 
 **Secrets**: never plaintext, even in `.env.example` (use `CHANGEME`). Sealed-secrets is the default pattern. `APP_KEY` is generated once and never regenerated.
 

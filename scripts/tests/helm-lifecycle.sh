@@ -46,6 +46,7 @@ values = {
 if os.environ.get('UNIT3D_TEST_IMAGE'):
     repository, tag = os.environ['UNIT3D_TEST_IMAGE'].rsplit(':', 1)
     values['unit3d']['image'] = {'registry': '', 'repository': repository, 'tag': tag}
+    values['migrate'] = {'image': os.environ.get('UNIT3D_MIGRATION_IMAGE', os.environ['UNIT3D_TEST_IMAGE'] + '-migration')}
 if os.environ.get('RWX_STORAGE_CLASS'):
     values['storage'] = {'storageClass': os.environ['RWX_STORAGE_CLASS'], 'accessMode': 'ReadWriteMany', 'size': '5Gi'}
     values['unit3d']['replicas'] = 2
@@ -99,6 +100,7 @@ $db->exec("CREATE TABLE ratatoskr_lifecycle_sentinel (id INT PRIMARY KEY)");
 $db->exec("INSERT INTO ratatoskr_lifecycle_sentinel VALUES (1)");'
 kubectl -n "$NAMESPACE" exec deploy/ratatoskr-unit3d-app -- php artisan scout:sync-index-settings
 check_search ratatoskr-unit3d-app
+python3 scripts/tests/network-isolation.py "$NAMESPACE" "${UNIT3D_TEST_IMAGE:-ghcr.io/john6810/unit3d:v9.2.0}"
 
 echo "Upgrade must preserve credentials, data, and migration gating"
 helm upgrade "${helm_args[@]}" --set unit3d.logLevel=debug --set "mariadb.auth.password=$(openssl rand -hex 24)"
@@ -175,6 +177,32 @@ values['meilisearch'] = {'enabled': False, 'masterKey': ''}
 (work / 'external-values.yaml').write_text(yaml.safe_dump(values))
 EXTERNAL
 kubectl apply -f "$work/external-secrets.yaml" >/dev/null
+# Sharing infrastructure between releases requires explicit consent on both
+# sides. Without this ingress exception the cross-release connection is denied.
+kubectl -n "$NAMESPACE" apply -f - <<'YAML'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: authorize-external-fixture
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: ratatoskr
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [mariadb, redis, meilisearch]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: external
+      ports:
+        - {protocol: TCP, port: 3306}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 7700}
+YAML
 helm install external helm/ratatoskr -n "$NAMESPACE" -f "$work/external-values.yaml" --wait --wait-for-jobs --timeout=5m
 helm test external -n "$NAMESPACE" --logs --timeout=120s
 kubectl -n "$NAMESPACE" exec deploy/external-unit3d-app -- php -r '

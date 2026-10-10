@@ -37,12 +37,15 @@ for d in docs:
         d['data'].pop('APP_KEY', None)  # Exercise actual key generation.
     pod = d.get('spec', {}).get('template', {}).get('spec', {})
     for c in pod.get('containers', []) + pod.get('initContainers', []):
+        if c['image'].startswith('ghcr.io/john6810/unit3d-migrate:') and os.environ.get('UNIT3D_TEST_IMAGE'):
+            c['image'] = os.environ.get('UNIT3D_MIGRATION_IMAGE', os.environ['UNIT3D_TEST_IMAGE'] + '-migration')
         if c['image'].startswith('ghcr.io/john6810/unit3d:') and os.environ.get('UNIT3D_TEST_IMAGE'):
             c['image'] = os.environ['UNIT3D_TEST_IMAGE']
     if d['kind'] == 'Job' and d['metadata']['name'] == 'unit3d-bootstrap-app-key':
         (work / 'bootstrap.yaml').write_text(yaml.safe_dump(d))
 (work / 'render.yaml').write_text(yaml.safe_dump_all(docs))
 PY
+python3 scripts/security/configure-api-egress.py "$work/render.yaml" "$work/render.yaml"
 kubectl apply -f "$work/render.yaml" >/dev/null
 kubectl -n "$namespace" wait --for=condition=complete job/unit3d-bootstrap-app-key --timeout=180s
 kubectl -n "$namespace" wait --for=condition=complete job/unit3d-migrate --timeout=600s

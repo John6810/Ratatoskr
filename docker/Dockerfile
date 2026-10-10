@@ -34,7 +34,9 @@ ENV COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_NO_INTERACTION=1 \
     DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
@@ -103,7 +105,7 @@ RUN rm -rf .git .github tests phpunit.xml .editorconfig .styleci.yml \
 # =============================================================================
 # Stage 2 — runtime: FrankenPHP worker mode. No compilers, no composer, no bun.
 # =============================================================================
-FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS runtime
+FROM dunglas/frankenphp:${FRANKENPHP_VERSION} AS runtime-base
 
 ARG UNIT3D_VERSION
 
@@ -128,7 +130,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # at database/schema/mysql-schema.sql (UNIT3D v9.2.0 ships one). Laravel shells
 # out to `mysql ... < mysql-schema.sql` for fast fresh installs. Also useful
 # for operators debugging the DB inside the container.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         mariadb-client \
@@ -155,6 +159,7 @@ RUN apt-get purge -y --auto-remove linux-libc-dev 2>/dev/null || true
 
 # Production php.ini (opcache enabled, sane memory_limit, no display_errors).
 RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+COPY docker/security/php.ini /usr/local/etc/php/conf.d/zz-ratatoskr-security.ini
 
 COPY --from=frankenphp-builder /usr/local/bin/frankenphp /usr/local/bin/frankenphp
 # COPY does not retain file capabilities; restore the official image's setting.
@@ -162,12 +167,13 @@ RUN setcap cap_net_bind_service=+ep /usr/local/bin/frankenphp
 
 WORKDIR /app
 
-# Application code, owned by www-data from the start (no post-COPY chown layer).
-COPY --chown=www-data:www-data --from=builder /build /app
+# Application code is immutable to the application user, including in Compose.
+# Only Laravel's storage and bootstrap cache are writable.
+COPY --chown=root:root --from=builder /build /app
 
 # Caddyfile is the source of truth for the server config. Auto-generated config
 # is not used in production. The file lives at docker/Caddyfile in this repo.
-COPY --chown=www-data:www-data docker/Caddyfile /etc/caddy/Caddyfile
+COPY --chown=root:root docker/Caddyfile /etc/caddy/Caddyfile
 
 # The dunglas/frankenphp Debian image already sets cap_net_bind_service on
 # /usr/local/bin/frankenphp — no extra setcap call needed. We just ensure the
@@ -177,6 +183,14 @@ RUN chown -R www-data:www-data \
         /app/bootstrap/cache \
         /data/caddy \
         /config/caddy
+
+# No local privilege-elevation helpers or PHP build/debug tools at runtime.
+# Keep php, its extensions, the DB client and curl for lifecycle/health checks.
+RUN find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
+    && rm -f /usr/local/bin/pear /usr/local/bin/peardev /usr/local/bin/pecl \
+        /usr/local/bin/php-cgi /usr/local/bin/phpdbg /usr/local/bin/phpize \
+        /usr/local/bin/php-config /usr/local/bin/install-php-extensions \
+        /usr/local/bin/docker-php-ext-* /usr/local/bin/docker-php-source
 
 # Wrapper entrypoint for cgroup-aware GOMEMLIMIT — see docker/entrypoint.sh.
 # Placed before USER www-data so RUN chmod has permission; ENTRYPOINT is
@@ -211,3 +225,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 #
 # Migrations are NOT run here. A dedicated Job runs after dependencies exist;
 # application init containers wait for that Job to complete successfully.
+
+# The short-lived migration image alone retains the SQL CLI needed to import
+# UNIT3D's schema dump. Web, queue and scheduler never need this client.
+FROM runtime-base AS migration
+LABEL org.opencontainers.image.title="ratatoskr-unit3d-migrate"
+ENTRYPOINT ["php", "/usr/local/lib/ratatoskr/lifecycle.php"]
+CMD ["migrate"]
+
+FROM runtime-base AS runtime
+USER root
+RUN apt-get purge -y --auto-remove mariadb-client mariadb-client-core mariadb-common libmariadb3 \
+    && rm -rf /var/lib/apt/lists/*
+USER www-data

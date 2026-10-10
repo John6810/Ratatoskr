@@ -14,21 +14,8 @@ spec:
         app.kubernetes.io/name: meilisearch
     spec:
       terminationGracePeriodSeconds: 30
-      # The upstream getmeili/meilisearch:v1.43 image runs as root by default
-      # (verified via `docker inspect` at v0.3 scaffolding: Config.User is empty,
-      # /meili_data is root:root). ratatoskr runs it as UID/GID 65532 — the
-      # conventional "nonroot" UID used by distroless and hardened container
-      # ecosystems (Google distroless, Chainguard, Wolfi). The Meilisearch
-      # upstream image has no native non-root user, so ratatoskr picks the UID.
-      # Using 65532 over 1000 keeps ratatoskr aligned with the broader
-      # container-hardened ecosystem and avoids the "looks like a regular
-      # Linux user" implicit assumption that 1000 carries. Components with a
-      # native user (Redis 999, MariaDB 999, www-data 33) keep theirs.
-      #
-      # The override is safe because /bin/meilisearch is +x for all, fsGroup
-      # 65532 makes the /meili_data PVC mount group-writable, and Meilisearch
-      # writes only under MEILI_DB_PATH (default /meili_data, which holds the
-      # LMDB store, dumps, and snapshots).
+      # The maintained image and Kubernetes both use UID/GID 65532.
+      # fsGroup grants access to provisioned PVCs; preserve existing index data.
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -36,7 +23,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: meilisearch
-          image: getmeili/meilisearch:v1.43
+          image: ghcr.io/john6810/ratatoskr-meilisearch:security-20261010
           imagePullPolicy: IfNotPresent
           # Mirrors compose/docker-compose.yml:50-58. MEILI_MASTER_KEY is
           # mandatory (16+ bytes). MEILI_ENV defaults to production; overlays/dev
